@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package notochord.v1;
+package _meta.v1;
 
-// Value types for Notochord (the columnar time-series buffer), conforming to the Metamodel
+// Value types for various projects, conforming to the Metamodel
 // design document.
 //
 // This type system is inspired by, and intended to be cleanly
@@ -213,8 +213,7 @@ message EntityRefType {
   // The type UUID of the entity being referenced. In the metamodel this
   // is a schema-level constraint on the parent Entity Type Declaration's
   // foreign_key_properties, not on the value itself; we carry it here
-  // for notochord schemas that don't have a full Entity Type
-  // Declaration context.
+  // for schemas that don't have a full Entity Type Declaration context.
   string target_type_id = 1;
 
   // Schema of the target's primary key. For a single-UUID target this is

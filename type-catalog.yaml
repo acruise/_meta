@@ -1,4 +1,4 @@
-# Notochord type catalog — rosetta stone for value types.
+# _meta type catalog — rosetta stone for value types.
 #
 # Maps between three type systems:
 #   internal:   Our ValueType proto / Rust Value enum variant.
@@ -14,7 +14,7 @@
 #   mapped    — clean bidirectional mapping
 #   partial   — mapping exists but lossy or conditional (see notes)
 #   todo      — we'll need this but haven't wired it up
-#   notochord_only — no equivalent in CEL or Substrait
+#   _meta_only — no equivalent in CEL or Substrait
 #
 # Type parameters:
 #   Some types are parameterized. The `params` field lists them.
@@ -301,7 +301,7 @@
   internal: EnumType
   cel: null
   substrait: null
-  status: notochord_only
+  status: _meta_only
   params:
     - { name: values, kind: "list(string)", notes: "ordered set of valid string labels" }
   notes: >
@@ -309,7 +309,7 @@
     Substrait has no enum. Stored as u32 ordinal internally.
 
 # ═══════════════════════════════════════════════════════════════════════
-#  ENTITY REFERENCE (notochord-specific)
+#  ENTITY REFERENCE (_meta-specific)
 # ═══════════════════════════════════════════════════════════════════════
 
 - id: entity_ref
@@ -327,14 +327,14 @@
     design but not expected to be implemented.
 
 # ═══════════════════════════════════════════════════════════════════════
-#  VALUE TYPE REFERENCE (notochord-specific)
+#  VALUE TYPE REFERENCE (_meta-specific)
 # ═══════════════════════════════════════════════════════════════════════
 
 - id: type_ref
   internal: ValueTypeRef
   cel: null
   substrait: null
-  status: notochord_only
+  status: _meta_only
   params:
     - { name: declaration_id, kind: string }
     - { name: declaration_revision, kind: u64 }

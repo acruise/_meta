@@ -1,4 +1,4 @@
-# Notochord function catalog — the rosetta stone.
+# _meta function catalog — the rosetta stone.
 #
 # Each entry has a unique `id` that lives in no external namespace.
 # The three optional mapping columns are:
@@ -1133,7 +1133,7 @@
   return: "list(T)"
 
 # ═══════════════════════════════════════════════════════════════════════
-#  JSON (notochord extension; no CEL or Substrait equivalent)
+#  JSON (_meta extension; no CEL or Substrait equivalent)
 # ═══════════════════════════════════════════════════════════════════════
 
 - id: json_parse
@@ -1184,7 +1184,7 @@
     even for numbers/booleans. Matches Trino's json_extract_scalar behavior.
 
 # ═══════════════════════════════════════════════════════════════════════
-#  NETWORK (notochord extension)
+#  NETWORK (_meta extension)
 # ═══════════════════════════════════════════════════════════════════════
 
 - id: cidr_contains
@@ -1222,7 +1222,7 @@
   notes: render integer as dotted-quad (v4) or colon-hex (v6)
 
 # ═══════════════════════════════════════════════════════════════════════
-#  NOTOCHORD-SPECIFIC (no CEL or Substrait equivalent)
+#  _meta-SPECIFIC (no CEL or Substrait equivalent)
 # ═══════════════════════════════════════════════════════════════════════
 
 - id: get_field_by_name
