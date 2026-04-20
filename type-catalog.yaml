@@ -1,0 +1,420 @@
+# Notochord type catalog — rosetta stone for value types.
+#
+# Maps between three type systems:
+#   internal:   Our ValueType proto / Rust Value enum variant.
+#   cel:        CEL runtime type name.
+#   substrait:  Substrait type name (from substrait/type.proto).
+#
+# Nullability is deliberately omitted from individual type entries.
+# In our model (and CEL's), nullability is a property of the container
+# (column, struct field, array element, map value), not of the type itself.
+# Substrait puts nullability on every type; the mapping layer handles that.
+#
+# Status values:
+#   mapped    — clean bidirectional mapping
+#   partial   — mapping exists but lossy or conditional (see notes)
+#   todo      — we'll need this but haven't wired it up
+#   notochord_only — no equivalent in CEL or Substrait
+#
+# Type parameters:
+#   Some types are parameterized. The `params` field lists them.
+#   Each parameter has:
+#     name       — identifier
+#     kind       — u8, u32, u64, i32, bool, string, ValueType, list(StructField), etc.
+#     optional   — true if the parameter may be omitted (defaults to false)
+#     default    — value used when omitted (only valid if optional: true)
+#     notes      — clarifications
+#
+# Substrait type reference:
+#   https://github.com/substrait-io/substrait/blob/main/proto/substrait/type.proto
+
+# ═══════════════════════════════════════════════════════════════════════
+#  BOOLEAN
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: boolean
+  internal: BooleanType
+  cel: bool
+  substrait: bool
+  status: mapped
+
+# ═══════════════════════════════════════════════════════════════════════
+#  INTEGERS
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: int8
+  internal: Int8Type
+  cel: int
+  substrait: i8
+  status: partial
+  notes: CEL has only int (i64); narrowing on ingest, widening on read
+
+- id: int16
+  internal: Int16Type
+  cel: int
+  substrait: i16
+  status: partial
+  notes: CEL has only int (i64)
+
+- id: int32
+  internal: Int32Type
+  cel: int
+  substrait: i32
+  status: partial
+  notes: CEL has only int (i64)
+
+- id: int64
+  internal: Int64Type
+  cel: int
+  substrait: i64
+  status: mapped
+
+- id: uint8
+  internal: UInt8Type
+  cel: uint
+  substrait: null
+  status: partial
+  notes: Substrait has no unsigned types; map to i16 to preserve range
+
+- id: uint16
+  internal: UInt16Type
+  cel: uint
+  substrait: null
+  status: partial
+  notes: Substrait has no unsigned types; map to i32 to preserve range
+
+- id: uint32
+  internal: UInt32Type
+  cel: uint
+  substrait: null
+  status: partial
+  notes: Substrait has no unsigned types; map to i64 to preserve range
+
+- id: uint64
+  internal: UInt64Type
+  cel: uint
+  substrait: null
+  status: partial
+  notes: >
+    Substrait has no unsigned types and no i128.
+    Values > i64::MAX require decimal(20,0) or are lossy.
+    CEL uint is u64 natively.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  FLOATING POINT
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: float32
+  internal: Float32Type
+  cel: double
+  substrait: fp32
+  status: partial
+  notes: CEL has only double (f64); widening on read
+
+- id: float64
+  internal: Float64Type
+  cel: double
+  substrait: fp64
+  status: mapped
+
+# ═══════════════════════════════════════════════════════════════════════
+#  DECIMAL
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: decimal
+  internal: DecimalType
+  cel: null
+  substrait: decimal
+  status: partial
+  params:
+    - { name: precision, kind: u8, default: 38, notes: "total digits, max 38. Substrait uses i32 and allows nearly arbitrary precision; we don't." }
+    - { name: scale, kind: u8, default: 0, notes: "digits after decimal point; 0 means integer" }
+  notes: >
+    Both Substrait and our type carry precision and scale.
+    CEL has no native decimal; values surface as double or int depending on scale.
+    Internal storage is i64 (up to 18 digits) or i128 (up to 38 digits),
+    matching Trino conventions. Full decimal support will require a custom CEL
+    extension set: decimal-aware arithmetic (_+_, _-_, _*_, _/_, _%_),
+    comparison, rounding, and conversion functions that preserve precision/scale
+    rather than widening to double. Rare in streaming but unavoidable for
+    financial/billing pipelines.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STRING / BYTES
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: string
+  internal: StringType
+  cel: string
+  substrait: string
+  status: mapped
+  params:
+    - { name: max_length, kind: u32, optional: true, default: 0, notes: "0 means unbounded. Substrait varchar(L) is similar." }
+  notes: our StringType has optional max_length; Substrait varchar has length; CEL has neither
+
+- id: fixedchar
+  internal: null
+  cel: string
+  substrait: fixedchar
+  status: partial
+  params:
+    - { name: length, kind: u32 }
+  notes: >
+    Fixed-length character type. Substrait has fixedchar(L); we don't store
+    this natively. On input, treat as StringType with max_length=L.
+    On output, right-pad with spaces to L if the consumer requires it.
+
+- id: blob
+  internal: BlobType
+  cel: bytes
+  substrait: binary
+  status: mapped
+
+- id: clob
+  internal: ClobType
+  cel: string
+  substrait: string
+  status: partial
+  params:
+    - { name: encoding, kind: string, default: "utf-8", notes: "e.g. utf-8, utf-16, shift-jis" }
+  notes: >
+    ClobType carries an encoding parameter (utf-8, utf-16, shift-jis, etc.).
+    CEL and Substrait assume UTF-8. Non-UTF-8 CLOBs require transcoding at
+    the CEL/Substrait boundary.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  DATE / TIME
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: date
+  internal: DateType
+  cel: null
+  substrait: date
+  status: partial
+  notes: CEL has no date type; surfaces as int (epoch days) or timestamp
+
+- id: timestamp
+  internal: TimestampType
+  cel: timestamp
+  substrait: timestamp_tz
+  status: partial
+  params:
+    - { name: precision, kind: u8, default: 3, notes: "TimestampPrecision enum: 1=s, 2=ms, 3=us, 4=ns; default is millis" }
+    - name: timezone
+      kind: enum
+      values: [none, utc_offset]
+      default: none
+      notes: >
+        none: epoch value with no in-band timezone; interpretation is out-of-band convention.
+        utc_offset: a signed UTC offset (minutes) is bitpacked alongside the epoch value,
+        following the Trino TIMESTAMP WITH TIME ZONE convention where the offset is stored
+        in the low bits. This is not an IANA zone — it's the offset observed at the instant,
+        sufficient for display and arithmetic but not for DST-aware recurrence.
+  notes: >
+    Our TimestampType carries precision and optional in-band timezone offset.
+    Substrait splits into timestamp (no tz) and timestamp_tz (always UTC-normalized, microseconds).
+    CEL google.protobuf.Timestamp is seconds + nanos, always UTC.
+    The utc_offset variant maps to Substrait timestamp_tz; the none variant maps
+    to Substrait timestamp. Precision conversion required at boundaries in both cases.
+
+- id: duration
+  internal: null
+  cel: duration
+  substrait: interval_day
+  status: partial
+  storage: literal_only
+  notes: >
+    Durations exist as expression literals and intermediate values (e.g.
+    timestamp - timestamp → duration, or duration("5m") as a constant)
+    but are not stored in buffer columns. No ValueType / column storage.
+    CEL has google.protobuf.Duration (seconds + nanos).
+    Substrait has interval_day (days + microseconds) and interval_year (years + months).
+
+# ═══════════════════════════════════════════════════════════════════════
+#  UUID
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: uuid
+  internal: UuidType
+  cel: null
+  substrait: uuid
+  status: partial
+  notes: >
+    Substrait has native uuid. CEL has no uuid type; surfaces as
+    string or bytes. Internally stored as u128 (hi/lo meta-column).
+
+# ═══════════════════════════════════════════════════════════════════════
+#  COMPOUND TYPES
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: array
+  internal: ArrayType
+  cel: list
+  substrait: list
+  status: mapped
+  params:
+    - { name: element_type, kind: ValueType }
+    - { name: elements_nullable, kind: bool, default: false }
+  notes: >
+    All three are parameterized by element type.
+    Our ArrayType carries elements_nullable; Substrait puts nullability
+    on the element type itself; CEL doesn't track element nullability.
+
+- id: map
+  internal: MapType
+  cel: map
+  substrait: map
+  status: mapped
+  params:
+    - { name: key_type, kind: ValueType }
+    - { name: value_type, kind: ValueType }
+    - { name: values_nullable, kind: bool, default: false }
+  notes: >
+    All three are parameterized by key and value types.
+    Our MapType carries values_nullable; keys are never nullable per metamodel.
+    Substrait puts nullability on the value type.
+
+- id: struct
+  internal: StructType
+  cel: null
+  substrait: struct
+  status: partial
+  storage: column_and_literal
+  params:
+    - { name: fields, kind: "list(StructField)", notes: "ordered; each field has name, ValueType, nullable flag" }
+  compatibility: >
+    Two StructTypes are assignment-compatible if they have the same number
+    of fields and each positional pair has compatible ValueTypes and compatible
+    nullability (non-nullable assigns to nullable, not vice versa). Field names
+    are ignored for compatibility — they are metadata for access/projection,
+    not part of the structural identity. This follows Trino ROW semantics.
+    Equality comparison between struct values uses positional field matching
+    with the same name-erasure rule.
+  notes: >
+    CEL uses protobuf messages, not anonymous structs.
+    Our StructType is an ordered list of named, typed, optionally-nullable fields.
+    Substrait struct is the same. CEL interop requires a message descriptor.
+    Struct literals may appear in expressions (e.g. constructing a composite
+    key or a return value from a conditional).
+
+- id: enum
+  internal: EnumType
+  cel: null
+  substrait: null
+  status: notochord_only
+  params:
+    - { name: values, kind: "list(string)", notes: "ordered set of valid string labels" }
+  notes: >
+    A fixed list of string values. CEL has no enum type.
+    Substrait has no enum. Stored as u32 ordinal internally.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ENTITY REFERENCE (notochord-specific)
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: entity_ref
+  internal: EntityRefType
+  cel: null
+  substrait: null
+  status: discard
+  params:
+    - { name: target_type_id, kind: string }
+    - { name: key_type, kind: ValueType }
+    - { name: revision_pinnable, kind: bool, default: false }
+  notes: >
+    Foreign key to another entity from the metamodel. No clear use case
+    in the streaming buffer context. Carried forward from the metamodel
+    design but not expected to be implemented.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  VALUE TYPE REFERENCE (notochord-specific)
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: type_ref
+  internal: ValueTypeRef
+  cel: null
+  substrait: null
+  status: notochord_only
+  params:
+    - { name: declaration_id, kind: string }
+    - { name: declaration_revision, kind: u64 }
+  notes: >
+    Reference to a user-defined Value Type Declaration, resolved at
+    schema compile time. Primary use case: reusable StructType aliases
+    that avoid duplicating complex struct definitions across columns
+    and schemas. No equivalent in CEL or Substrait.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ANY (dynamic value type for semi-structured data)
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: any
+  internal: AnyType
+  cel: dyn
+  substrait: null
+  status: todo
+  storage: literal_only
+  notes: >
+    A dynamically-typed value. Unlike CEL's dyn (which is a type-checker
+    escape hatch), Any is a real type that participates in inference:
+    JSON arrays are Array[Any], JSON maps are Map[String, Any], and
+    JsonParse/JsonExtract return Any. You cast out of Any explicitly
+    via CastInt, CastString, etc. Not stored in buffer columns —
+    any value entering a column must be resolved to a concrete ValueType
+    at ingest time. Any exists in the expression type system only.
+
+- id: variant
+  internal: null
+  cel: null
+  substrait: null
+  status: todo
+  storage: column
+  notes: >
+    A self-describing dynamically-typed value with a stored type tag.
+    This is the thing the metamodel's "no self-describing data" principle
+    was designed to avoid — but Spark added VARIANT recently, and the
+    pressure from JSON/semi-structured ingestion makes it hard to escape
+    forever. Unlike Any (expression-only, resolved at compile time),
+    Variant would be a real column type where the type tag travels with
+    each row value at runtime. Not currently planned, but recorded here
+    as a known tension point.
+    Likely implementation: a meta-column with a u32 descriptor sub-column
+    (bitpacked as tag + per-arm offset, e.g. 8-bit tag + 24-bit offset)
+    and N parallel typed sub-columns (one per declared variant arm).
+    Each row's value lives in exactly one sub-column at the position
+    given by the descriptor's offset field; the others are untouched.
+    Sub-columns are dense within their arm, preserving homogeneous typing
+    and cache-friendliness. The set of variant arms is declared in the
+    schema (closed, not open-ended), giving a compact enum tag rather
+    than a full ValueType per row.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CEL-ONLY TYPES (no internal storage type)
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: cel_null_type
+  internal: null
+  cel: null_type
+  substrait: null
+  status: partial
+  notes: >
+    CEL's null_type. In our model, null is a Value::Null variant,
+    not a type. Appears in type-checking, not in storage.
+
+- id: cel_dyn
+  internal: null
+  cel: dyn
+  substrait: null
+  status: partial
+  notes: >
+    CEL's dynamic type. A type-checker hint, not a concrete type.
+    No storage representation.
+
+- id: cel_type
+  internal: null
+  cel: type
+  substrait: null
+  status: partial
+  notes: >
+    The type of types in CEL (e.g., type(1) == int).
+    No storage representation; exists only in expression evaluation.

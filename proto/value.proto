@@ -1,0 +1,239 @@
+syntax = "proto3";
+
+package notochord.v1;
+
+// Value types for Notochord (the columnar time-series buffer), conforming to the Metamodel
+// design document.
+//
+// This type system is inspired by, and intended to be cleanly
+// compatible with, the type systems of Trino/Presto, Apache Spark,
+// and Substrait. The scalar set (sized integers, sized floats,
+// decimal with precision and scale, timestamp with precision, date,
+// UUID, varchar/string, varbinary/blob) and the compound set (array,
+// map, struct/row) align with all three. The physical-width
+// conventions (long vs int128 for decimal, long vs long-timestamp
+// for sub-microsecond precision) follow Trino directly.
+//
+// The one deliberate divergence is nullability. Substrait allows
+// nullability to be spread across many more places than this type
+// system does: every scalar type in Substrait carries a nullability
+// flag. Following the Metamodel (and matching Trino, Spark, and
+// most relational type systems), we confine nullability to the
+// container: struct fields, array elements-nullable, map values-
+// nullable, and column-level nullable. A ValueType does not itself
+// carry a nullable bit.
+//
+// Key principles from the metamodel:
+//   * Nullability is NOT a dimension of ValueType. It appears only where
+//     nested data is permitted: as a flag on StructField, on Array's
+//     elementsNullable, and on Map's valuesNullable.
+//   * Storage layouts are NOT prescribed by the type system. The buffer
+//     chooses physical representations (dictionary-coded, byte-buffer,
+//     reference, delta-encoded, etc.) based on observed data and runtime
+//     configuration. Those choices do not appear in this file.
+//   * The set of ValueTypes is fixed (no "deep meta"). Runtime flexibility
+//     comes from composing these types into Structs, Arrays, Maps, and
+//     user-defined Value Type Declarations.
+
+// A value type. The top-level oneof partitions into scalar, parameterized
+// scalar, and compound variants.
+message ValueType {
+  oneof kind {
+    // --- Scalar types (singletons; no parameters) ---
+    BooleanType boolean = 1;
+    StringType string = 2;
+    Int8Type int8 = 3;
+    Int16Type int16 = 4;
+    Int32Type int32 = 5;
+    Int64Type int64 = 6;
+    UInt8Type uint8 = 7;
+    UInt16Type uint16 = 8;
+    UInt32Type uint32 = 9;
+    UInt64Type uint64 = 10;
+    Float32Type float32 = 11;
+    Float64Type float64 = 12;
+    DateType date = 13;
+    UuidType uuid = 14;
+    BlobType blob = 15;
+    ClobType clob = 16;
+
+    // --- Parameterized scalar types ---
+    DecimalType decimal = 30;
+    TimestampType timestamp = 31;
+
+    // --- Compound types ---
+    EnumType enum_type = 50;
+    ArrayType array = 51;
+    MapType map = 52;
+    StructType struct_type = 53;
+
+    // --- Foreign key ---
+    EntityRefType entity_ref = 70;
+
+    // --- Reference to a user-defined Value Type Declaration ---
+    ValueTypeRef type_ref = 90;
+  }
+}
+
+// --- Scalar type tags ---
+// All empty messages; they carry no parameters. Their identity is the
+// tag position in the oneof.
+
+message BooleanType {}
+message Int8Type {}
+message Int16Type {}
+message Int32Type {}
+message Int64Type {}
+message UInt8Type {}
+message UInt16Type {}
+message UInt32Type {}
+message UInt64Type {}
+message Float32Type {}
+message Float64Type {}
+message DateType {}
+message UuidType {}
+message BlobType {}
+
+// CLOB, parameterized with encoding. The metamodel notes that for some
+// scripts UTF-8 is particularly inefficient; the encoding parameter lets
+// a deployment choose.
+message ClobType {
+  string encoding = 1;  // e.g. "utf-8", "utf-16", "shift-jis"
+}
+
+// String type. Currently unparameterized, but the metamodel leaves room
+// for a max_length parameter (fixed vs variable). Deployments that need
+// it can add it without a breaking change.
+message StringType {
+  // Optional maximum length. 0 means unbounded (variable-length).
+  uint32 max_length = 1;
+}
+
+// --- Parameterized scalar types ---
+
+// Fixed-point decimal. precision is total digits; scale is digits after
+// the decimal point.
+message DecimalType {
+  uint32 precision = 1;
+  uint32 scale = 2;
+}
+
+// Timestamp at a declared precision, optionally carrying an in-band
+// UTC offset. The metamodel does not prescribe a default precision;
+// deployments may configure one (e.g. precision=3 for millis).
+message TimestampType {
+  TimestampPrecision precision = 1;
+  TimestampTimezone timezone = 2;
+}
+
+enum TimestampPrecision {
+  TIMESTAMP_PRECISION_UNSPECIFIED = 0;
+  TIMESTAMP_PRECISION_SECONDS = 1;
+  TIMESTAMP_PRECISION_MILLIS = 2;
+  TIMESTAMP_PRECISION_MICROS = 3;
+  TIMESTAMP_PRECISION_NANOS = 4;
+}
+
+// Whether a timestamp carries an in-band UTC offset.
+//
+// NONE: the epoch value stands alone; timezone interpretation is an
+// out-of-band convention. Maps to Substrait `timestamp`.
+//
+// UTC_OFFSET: a signed offset in minutes is stored alongside the epoch
+// value, following the Trino TIMESTAMP WITH TIME ZONE convention.
+// The offset records the UTC offset observed at the instant — it is
+// sufficient for display and arithmetic but does NOT encode an IANA
+// timezone (and therefore cannot resolve DST transitions for
+// future/hypothetical instants). Maps to Substrait `timestamp_tz`.
+//
+// In columnar storage, the offset is bitpacked with the epoch value
+// or stored in a companion sub-column, depending on precision. At
+// millisecond precision, Trino packs a 12-bit signed offset (minutes)
+// into the low bits of an i64, leaving 52 bits for the epoch — enough
+// for ±69 years from the base, which covers any realistic retention
+// window.
+enum TimestampTimezone {
+  TIMESTAMP_TIMEZONE_NONE = 0;
+  TIMESTAMP_TIMEZONE_UTC_OFFSET = 1;
+}
+
+// --- Compound types ---
+
+// Enum: a fixed list of acceptable string values. The metamodel notes
+// that "extensible enum" / algebraic data types are not provided (yet).
+message EnumType {
+  repeated string values = 1;
+}
+
+message ArrayType {
+  ValueType element_type = 1;
+  bool elements_nullable = 2;
+}
+
+// Map. The metamodel constrains key_type to scalar types with stable
+// bidirectional serde to/from strings. Validation is a schema-compile
+// responsibility; this proto carries the declared key type as-is.
+message MapType {
+  ValueType key_type = 1;
+  ValueType value_type = 2;
+  bool values_nullable = 3;
+  // Map keys are never nullable per the metamodel.
+}
+
+// Struct: an ordered list of StructFields.
+message StructType {
+  repeated StructField fields = 1;
+}
+
+// StructField: the only place in the type system (together with Array
+// elements and Map values) where nullability is declared.
+message StructField {
+  // Optional identifier-style name. Nameless fields are permitted and
+  // "show up in all kinds of places" per the metamodel.
+  string name = 1;
+
+  // Optional human-readable name.
+  string human_name = 2;
+
+  // Mandatory field type.
+  ValueType value_type = 3;
+
+  // Whether values in this field may be null.
+  bool nullable = 4;
+}
+
+// --- Entity reference (foreign key) ---
+
+// An EntityRef value references an entity instance by its ID (which may
+// be composite) and optionally designates a pinned revision. The storage
+// encoding is polymorphic (bare scalar, bare struct, struct-with-revision,
+// value#rev delimited string); this type declaration does not prescribe
+// an encoding.
+message EntityRefType {
+  // The type UUID of the entity being referenced. In the metamodel this
+  // is a schema-level constraint on the parent Entity Type Declaration's
+  // foreign_key_properties, not on the value itself; we carry it here
+  // for notochord schemas that don't have a full Entity Type
+  // Declaration context.
+  string target_type_id = 1;
+
+  // Schema of the target's primary key. For a single-UUID target this is
+  // a UuidType; for composite keys it is a StructType of non-nullable
+  // scalars.
+  ValueType key_type = 2;
+
+  // Whether this reference can designate a pinned revision. If true,
+  // EntityRef values carry an optional revision; if false, the reference
+  // always "floats" to the latest revision of the target.
+  bool revision_pinnable = 3;
+}
+
+// --- User-defined type references ---
+
+// A reference to a user-defined Value Type Declaration, looked up by
+// type UUID at schema resolution time. Resolves to a full ValueType
+// (plus validation rules that are enforced at ingest time).
+message ValueTypeRef {
+  string declaration_id = 1;
+  uint64 declaration_revision = 2;
+}

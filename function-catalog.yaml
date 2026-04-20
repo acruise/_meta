@@ -1,0 +1,1273 @@
+# Notochord function catalog — the rosetta stone.
+#
+# Each entry has a unique `id` that lives in no external namespace.
+# The three optional mapping columns are:
+#   internal:   Our IR node name. Drives codegen of ExprKind variants.
+#   cel:        CEL function name (operator or method). How users write it.
+#   substrait:  Substrait extension + name. For interop reference.
+#
+# Any of the three may be absent. An entry with no `internal` won't
+# generate an IR node. An entry with no `cel` has no user-facing syntax
+# (yet). An entry with no `substrait` is ours alone.
+#
+# Status values:
+#   mapped    — clean mapping exists in all populated columns
+#   partial   — mapping exists but semantics differ (see notes)
+#   todo      — we want this but haven't wired it up yet
+#   discard   — deliberately excluded (reason in notes)
+#
+# Type system for params/return:
+#   Concrete types where known: bool, int, uint, double, string, bytes,
+#     timestamp, duration, struct, type, dyn, any
+#   Binding variables where params must unify: T, T2, K, V
+#     All uses of the same variable within one entry must resolve to the
+#     same concrete type. "T?" means nullable T.
+#   Constraints narrow what a variable can bind to:
+#     Comparable  — types that support == and != (all scalars, string, bytes,
+#                   timestamp, duration)
+#     Ordered     — types that support <, <=, >, >= (Comparable minus bool)
+#     Numeric     — int, uint, double (and decimal when supported)
+#     Summable    — Numeric plus duration and timestamp+duration combinations
+#     Sizable     — string, bytes, list(T), map(K, V)
+#     Castable    — types that support explicit conversion (most scalars,
+#                   string, bytes, timestamp, duration)
+#   Parameterized types: list(T), map(K, V), struct(...)
+#
+# Receiver notation: "string.contains" means method-style call in CEL.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  BOOLEAN / LOGICAL
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: logical_or
+  internal: LogicalOr
+  cel: "_||_"
+  substrait: { ext: functions_boolean, name: or }
+  status: mapped
+  commutative: true
+  short_circuits: true
+  params: [bool, bool]
+  return: bool
+
+- id: logical_and
+  internal: LogicalAnd
+  cel: "_&&_"
+  substrait: { ext: functions_boolean, name: and }
+  status: mapped
+  commutative: true
+  short_circuits: true
+  params: [bool, bool]
+  return: bool
+
+- id: logical_not
+  internal: LogicalNot
+  cel: "!_"
+  substrait: { ext: functions_boolean, name: not }
+  status: mapped
+  params: [bool]
+  return: bool
+
+- id: and_not
+  substrait: { ext: functions_boolean, name: and_not }
+  status: todo
+  params: [bool, bool]
+  return: bool
+  notes: no CEL equivalent; expressible as LogicalAnd(a, LogicalNot(b))
+
+- id: xor
+  substrait: { ext: functions_boolean, name: xor }
+  status: todo
+  params: [bool, bool]
+  return: bool
+  notes: no CEL equivalent; expressible as NotEqual(a, b) for booleans
+
+- id: bool_and_agg
+  substrait: { ext: functions_boolean, name: bool_and }
+  status: discard
+  notes: aggregate; handled by our accumulator framework
+
+- id: bool_or_agg
+  substrait: { ext: functions_boolean, name: bool_or }
+  status: discard
+  notes: aggregate; handled by our accumulator framework
+
+# ═══════════════════════════════════════════════════════════════════════
+#  COMPARISON
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: equal
+  internal: Equal
+  cel: "_==_"
+  substrait: { ext: functions_comparison, name: equal }
+  status: mapped
+  commutative: true
+  null_semantics: propagate
+  params: ["Comparable:T", "T"]
+  return: bool
+  notes: both params must unify. null input → null output. See null_safe_equal for SQL IS NOT DISTINCT FROM.
+
+- id: not_equal
+  internal: NotEqual
+  cel: "_!=_"
+  substrait: { ext: functions_comparison, name: not_equal }
+  status: mapped
+  commutative: true
+  null_semantics: propagate
+  params: ["Comparable:T", "T"]
+  return: bool
+  notes: both params must unify. null input → null output. See null_safe_not_equal for SQL IS DISTINCT FROM.
+
+- id: less_than
+  internal: LessThan
+  cel: "_<_"
+  substrait: { ext: functions_comparison, name: lt }
+  status: mapped
+  null_semantics: propagate
+  params: ["Ordered:T", "T"]
+  return: bool
+
+- id: less_or_equal
+  internal: LessOrEqual
+  cel: "_<=_"
+  substrait: { ext: functions_comparison, name: lte }
+  status: mapped
+  null_semantics: propagate
+  params: ["Ordered:T", "T"]
+  return: bool
+
+- id: greater_than
+  internal: GreaterThan
+  cel: "_>_"
+  substrait: { ext: functions_comparison, name: gt }
+  status: mapped
+  null_semantics: propagate
+  params: ["Ordered:T", "T"]
+  return: bool
+
+- id: greater_or_equal
+  internal: GreaterOrEqual
+  cel: "_>=_"
+  substrait: { ext: functions_comparison, name: gte }
+  status: mapped
+  null_semantics: propagate
+  params: ["Ordered:T", "T"]
+  return: bool
+
+- id: between
+  internal: Between
+  substrait: { ext: functions_comparison, name: between }
+  status: todo
+  params: ["Ordered:T", "T", "T"]
+  return: bool
+  notes: no CEL equivalent; lower to LogicalAnd(GreaterOrEqual(x, lo), LessOrEqual(x, hi))
+
+- id: null_safe_equal
+  internal: NullSafeEqual
+  substrait: { ext: functions_comparison, name: is_not_distinct_from }
+  status: todo
+  commutative: true
+  null_semantics: consume
+  params: ["Comparable:T?", "T?"]
+  return: bool
+  notes: SQL null-safe equality (null == null → true). Distinct from Equal which propagates null.
+
+- id: null_safe_not_equal
+  internal: NullSafeNotEqual
+  substrait: { ext: functions_comparison, name: is_distinct_from }
+  status: todo
+  commutative: true
+  null_semantics: consume
+  params: ["Comparable:T?", "T?"]
+  return: bool
+  notes: SQL null-safe inequality (null != null → false). Distinct from NotEqual which propagates null.
+
+- id: is_null
+  internal: IsNull
+  substrait: { ext: functions_comparison, name: is_null }
+  status: todo
+  null_semantics: consume
+  params: ["T?"]
+  return: bool
+  notes: CEL uses has() macro for presence; we likely need this for nullable columns
+
+- id: is_not_null
+  internal: IsNotNull
+  substrait: { ext: functions_comparison, name: is_not_null }
+  status: todo
+  null_semantics: consume
+  params: ["T?"]
+  return: bool
+
+- id: is_nan
+  internal: IsNan
+  substrait: { ext: functions_comparison, name: is_nan }
+  status: todo
+  notes: useful for float column guards
+  params: [double]
+  return: bool
+
+- id: is_finite
+  internal: IsFinite
+  substrait: { ext: functions_comparison, name: is_finite }
+  status: todo
+  params: [double]
+  return: bool
+
+- id: is_infinite
+  internal: IsInfinite
+  substrait: { ext: functions_comparison, name: is_infinite }
+  status: todo
+  params: [double]
+  return: bool
+  notes: NaN is neither finite nor infinite; IsInfinite != LogicalNot(IsFinite)
+
+- id: coalesce
+  internal: Coalesce
+  substrait: { ext: functions_comparison, name: coalesce }
+  status: todo
+  null_semantics: consume
+  notes: returns first non-null argument
+  params: ["T?", "T?"]
+  return: T
+
+- id: least
+  internal: Least
+  substrait: { ext: functions_comparison, name: least }
+  status: todo
+  params: ["Ordered:T", "T"]
+  return: T
+
+- id: greatest
+  internal: Greatest
+  substrait: { ext: functions_comparison, name: greatest }
+  status: todo
+  params: ["Ordered:T", "T"]
+  return: T
+
+- id: is_true
+  substrait: { ext: functions_comparison, name: is_true }
+  status: discard
+  notes: identity in CEL
+
+- id: is_not_true
+  substrait: { ext: functions_comparison, name: is_not_true }
+  status: discard
+
+- id: is_false
+  substrait: { ext: functions_comparison, name: is_false }
+  status: discard
+
+- id: is_not_false
+  substrait: { ext: functions_comparison, name: is_not_false }
+  status: discard
+
+- id: nullif
+  substrait: { ext: functions_comparison, name: nullif }
+  status: discard
+  notes: SQL-ism
+
+- id: least_skip_null
+  substrait: { ext: functions_comparison, name: least_skip_null }
+  status: discard
+
+- id: greatest_skip_null
+  substrait: { ext: functions_comparison, name: greatest_skip_null }
+  status: discard
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ARITHMETIC
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: add
+  internal: Add
+  cel: "_+_"
+  substrait: { ext: functions_arithmetic, name: add }
+  status: mapped
+  commutative: true
+  params: ["Summable:T", "T"]
+  return: T
+  notes: also string/bytes/list concat and timestamp+duration in CEL
+
+- id: subtract
+  internal: Subtract
+  cel: "_-_"
+  substrait: { ext: functions_arithmetic, name: subtract }
+  status: mapped
+  params: ["Summable:T", "T"]
+  return: T
+
+- id: multiply
+  internal: Multiply
+  cel: "_*_"
+  substrait: { ext: functions_arithmetic, name: multiply }
+  status: mapped
+  commutative: true
+  params: ["Numeric:T", "T"]
+  return: T
+
+- id: divide
+  internal: Divide
+  cel: "_/_"
+  substrait: { ext: functions_arithmetic, name: divide }
+  status: mapped
+  params: ["Numeric:T", "T"]
+  return: T
+
+- id: negate
+  internal: Negate
+  cel: "-_"
+  substrait: { ext: functions_arithmetic, name: negate }
+  status: mapped
+  params: ["Numeric:T"]
+  return: T
+
+- id: modulus
+  internal: Modulus
+  cel: "_%_"
+  substrait: { ext: functions_arithmetic, name: modulus }
+  status: mapped
+  params: ["Numeric:T", "T"]
+  return: T
+
+- id: abs
+  internal: Abs
+  substrait: { ext: functions_arithmetic, name: abs }
+  status: todo
+  params: ["Numeric:T"]
+  return: T
+
+- id: power
+  internal: Power
+  substrait: { ext: functions_arithmetic, name: power }
+  status: todo
+  params: ["Numeric:T", "T"]
+  return: T
+
+- id: sqrt
+  internal: Sqrt
+  substrait: { ext: functions_arithmetic, name: sqrt }
+  status: todo
+  params: [double]
+  return: double
+
+- id: exp
+  internal: Exp
+  substrait: { ext: functions_arithmetic, name: exp }
+  status: todo
+  params: [double]
+  return: double
+
+- id: sign
+  internal: Sign
+  substrait: { ext: functions_arithmetic, name: sign }
+  status: todo
+  params: ["Numeric:T"]
+  return: T
+
+- id: factorial
+  substrait: { ext: functions_arithmetic, name: factorial }
+  status: discard
+
+# trig — all discarded
+- id: cos
+  substrait: { ext: functions_arithmetic, name: cos }
+  status: discard
+- id: sin
+  substrait: { ext: functions_arithmetic, name: sin }
+  status: discard
+- id: tan
+  substrait: { ext: functions_arithmetic, name: tan }
+  status: discard
+- id: cosh
+  substrait: { ext: functions_arithmetic, name: cosh }
+  status: discard
+- id: sinh
+  substrait: { ext: functions_arithmetic, name: sinh }
+  status: discard
+- id: tanh
+  substrait: { ext: functions_arithmetic, name: tanh }
+  status: discard
+- id: acos
+  substrait: { ext: functions_arithmetic, name: acos }
+  status: discard
+- id: asin
+  substrait: { ext: functions_arithmetic, name: asin }
+  status: discard
+- id: atan
+  substrait: { ext: functions_arithmetic, name: atan }
+  status: discard
+- id: acosh
+  substrait: { ext: functions_arithmetic, name: acosh }
+  status: discard
+- id: asinh
+  substrait: { ext: functions_arithmetic, name: asinh }
+  status: discard
+- id: atanh
+  substrait: { ext: functions_arithmetic, name: atanh }
+  status: discard
+- id: atan2
+  substrait: { ext: functions_arithmetic, name: atan2 }
+  status: discard
+- id: radians
+  substrait: { ext: functions_arithmetic, name: radians }
+  status: discard
+- id: degrees
+  substrait: { ext: functions_arithmetic, name: degrees }
+  status: discard
+
+# bitwise — all discarded
+- id: bitwise_not
+  substrait: { ext: functions_arithmetic, name: bitwise_not }
+  status: discard
+- id: bitwise_and
+  substrait: { ext: functions_arithmetic, name: bitwise_and }
+  status: discard
+- id: bitwise_or
+  substrait: { ext: functions_arithmetic, name: bitwise_or }
+  status: discard
+- id: bitwise_xor
+  substrait: { ext: functions_arithmetic, name: bitwise_xor }
+  status: discard
+- id: shift_left
+  substrait: { ext: functions_arithmetic, name: shift_left }
+  status: discard
+- id: shift_right
+  substrait: { ext: functions_arithmetic, name: shift_right }
+  status: discard
+- id: shift_right_unsigned
+  substrait: { ext: functions_arithmetic, name: shift_right_unsigned }
+  status: discard
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STRING
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: contains
+  internal: Contains
+  cel: contains
+  substrait: { ext: functions_string, name: contains }
+  status: mapped
+  receiver: string
+  params: [string]
+  return: bool
+
+- id: starts_with
+  internal: StartsWith
+  cel: startsWith
+  substrait: { ext: functions_string, name: starts_with }
+  status: mapped
+  receiver: string
+  params: [string]
+  return: bool
+
+- id: ends_with
+  internal: EndsWith
+  cel: endsWith
+  substrait: { ext: functions_string, name: ends_with }
+  status: mapped
+  receiver: string
+  params: [string]
+  return: bool
+
+- id: regex_match
+  internal: RegexMatch
+  cel: matches
+  substrait: { ext: functions_string, name: regexp_match_substring }
+  status: partial
+  notes: CEL returns bool; Substrait returns the matched substring
+  receiver: string
+  params: [string]
+  return: bool
+
+- id: size
+  internal: Size
+  cel: size
+  substrait: { ext: functions_string, name: char_length }
+  status: mapped
+  notes: also maps to Substrait octet_length for bytes, and list/map cardinality
+  params: ["Sizable:T"]
+  return: int
+
+- id: lower
+  internal: Lower
+  substrait: { ext: functions_string, name: lower }
+  status: todo
+  params: [string]
+  return: string
+
+- id: upper
+  internal: Upper
+  substrait: { ext: functions_string, name: upper }
+  status: todo
+  params: [string]
+  return: string
+
+- id: substring
+  internal: Substring
+  substrait: { ext: functions_string, name: substring }
+  status: todo
+  params: [string, int, int]
+  return: string
+
+- id: replace
+  internal: Replace
+  substrait: { ext: functions_string, name: replace }
+  status: todo
+  params: [string, string, string]
+  return: string
+
+- id: trim
+  internal: Trim
+  substrait: { ext: functions_string, name: trim }
+  status: todo
+  params: [string]
+  return: string
+
+- id: string_split
+  internal: StringSplit
+  substrait: { ext: functions_string, name: string_split }
+  status: todo
+  params: [string, string]
+  return: "list(string)"
+
+- id: string_position
+  internal: StringPosition
+  substrait: { ext: functions_string, name: strpos }
+  status: todo
+  params: [string, string]
+  return: int
+
+- id: concat
+  internal: Concat
+  cel: "_+_"
+  substrait: { ext: functions_string, name: concat }
+  status: mapped
+  params: [string, string]
+  return: string
+  notes: in CEL this is the _+_ operator on strings
+
+- id: like
+  substrait: { ext: functions_string, name: like }
+  status: discard
+  notes: SQL LIKE; use RegexMatch instead
+
+- id: regexp_match_all
+  substrait: { ext: functions_string, name: regexp_match_substring_all }
+  status: todo
+- id: regexp_strpos
+  substrait: { ext: functions_string, name: regexp_strpos }
+  status: todo
+- id: count_substring
+  substrait: { ext: functions_string, name: count_substring }
+  status: todo
+- id: regexp_count_substring
+  substrait: { ext: functions_string, name: regexp_count_substring }
+  status: todo
+- id: regexp_replace
+  substrait: { ext: functions_string, name: regexp_replace }
+  status: todo
+- id: concat_ws
+  substrait: { ext: functions_string, name: concat_ws }
+  status: todo
+- id: ltrim
+  substrait: { ext: functions_string, name: ltrim }
+  status: todo
+- id: rtrim
+  substrait: { ext: functions_string, name: rtrim }
+  status: todo
+- id: left
+  substrait: { ext: functions_string, name: left }
+  status: todo
+- id: right
+  substrait: { ext: functions_string, name: right }
+  status: todo
+- id: regexp_string_split
+  substrait: { ext: functions_string, name: regexp_string_split }
+  status: todo
+
+- id: repeat
+  substrait: { ext: functions_string, name: repeat }
+  status: discard
+- id: reverse
+  substrait: { ext: functions_string, name: reverse }
+  status: discard
+- id: replace_slice
+  substrait: { ext: functions_string, name: replace_slice }
+  status: discard
+- id: swapcase
+  substrait: { ext: functions_string, name: swapcase }
+  status: discard
+- id: capitalize
+  substrait: { ext: functions_string, name: capitalize }
+  status: discard
+- id: title
+  substrait: { ext: functions_string, name: title }
+  status: discard
+- id: initcap
+  substrait: { ext: functions_string, name: initcap }
+  status: discard
+- id: bit_length
+  substrait: { ext: functions_string, name: bit_length }
+  status: discard
+- id: lpad
+  substrait: { ext: functions_string, name: lpad }
+  status: discard
+- id: rpad
+  substrait: { ext: functions_string, name: rpad }
+  status: discard
+- id: center
+  substrait: { ext: functions_string, name: center }
+  status: discard
+- id: string_agg
+  substrait: { ext: functions_string, name: string_agg }
+  status: discard
+
+# ═══════════════════════════════════════════════════════════════════════
+#  DATETIME
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: timestamp_extract
+  internal: TimestampExtract
+  cel: getFullYear/getMonth/getHours/etc
+  substrait: { ext: functions_datetime, name: extract }
+  status: partial
+  params: [timestamp]
+  return: int
+  notes: CEL splits into per-component methods; we unify as extract(component, ts)
+
+- id: round_temporal
+  internal: RoundTemporal
+  substrait: { ext: functions_datetime, name: round_temporal }
+  status: todo
+  params: [timestamp]
+  return: timestamp
+  notes: useful for time bucketing in predicates
+
+- id: round_calendar
+  internal: RoundCalendar
+  substrait: { ext: functions_datetime, name: round_calendar }
+  status: todo
+  params: [timestamp]
+  return: timestamp
+
+- id: current_timestamp
+  internal: CurrentTimestamp
+  substrait: { ext: functions_datetime, name: local_timestamp }
+  status: todo
+  params: []
+  return: timestamp
+  notes: maps to coeffect reads_current_time in our model
+
+- id: duration_multiply
+  substrait: { ext: functions_datetime, name: multiply }
+  status: todo
+  params: [duration, Numeric]
+  return: duration
+  notes: duration * scalar; no CEL equivalent
+
+- id: assume_timezone
+  substrait: { ext: functions_datetime, name: assume_timezone }
+  status: todo
+
+- id: extract_boolean
+  substrait: { ext: functions_datetime, name: extract_boolean }
+  status: discard
+
+- id: strptime_time
+  substrait: { ext: functions_datetime, name: strptime_time }
+  status: discard
+- id: strptime_date
+  substrait: { ext: functions_datetime, name: strptime_date }
+  status: discard
+
+# datetime add/subtract/compare — these are overloads of the arithmetic
+# operators, not separate functions. Listed here for Substrait cross-ref.
+- id: datetime_add
+  substrait: { ext: functions_datetime, name: add }
+  status: mapped
+  notes: handled by add (CEL _+_ timestamp/duration overloads)
+- id: datetime_subtract
+  substrait: { ext: functions_datetime, name: subtract }
+  status: mapped
+  notes: handled by subtract
+- id: datetime_add_intervals
+  substrait: { ext: functions_datetime, name: add_intervals }
+  status: mapped
+  notes: handled by add (duration+duration)
+- id: datetime_lt
+  substrait: { ext: functions_datetime, name: lt }
+  status: mapped
+  notes: handled by less_than
+- id: datetime_lte
+  substrait: { ext: functions_datetime, name: lte }
+  status: mapped
+  notes: handled by less_or_equal
+- id: datetime_gt
+  substrait: { ext: functions_datetime, name: gt }
+  status: mapped
+  notes: handled by greater_than
+- id: datetime_gte
+  substrait: { ext: functions_datetime, name: gte }
+  status: mapped
+  notes: handled by greater_or_equal
+- id: datetime_parse
+  substrait: { ext: functions_datetime, name: strptime_timestamp }
+  status: mapped
+  notes: handled by cast_timestamp (CEL timestamp())
+- id: datetime_format
+  substrait: { ext: functions_datetime, name: strftime }
+  status: mapped
+  notes: handled by cast_string (CEL string())
+
+# ═══════════════════════════════════════════════════════════════════════
+#  TYPE CONVERSIONS (CEL builtins, no Substrait equivalent)
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: cast_bool
+  internal: CastBool
+  cel: bool
+  status: mapped
+  params: [Castable]
+  return: bool
+
+- id: cast_int
+  internal: CastInt
+  cel: int
+  status: mapped
+  params: [Castable]
+  return: int
+
+- id: cast_uint
+  internal: CastUint
+  cel: uint
+  status: mapped
+  params: [Castable]
+  return: uint
+
+- id: cast_double
+  internal: CastDouble
+  cel: double
+  status: mapped
+  params: [Castable]
+  return: double
+
+- id: cast_string
+  internal: CastString
+  cel: string
+  status: mapped
+  params: [Castable]
+  return: string
+
+- id: cast_bytes
+  internal: CastBytes
+  cel: bytes
+  status: mapped
+  params: [Castable]
+  return: bytes
+
+- id: cast_duration
+  internal: CastDuration
+  cel: duration
+  status: mapped
+  params: [Castable]
+  return: duration
+
+- id: cast_timestamp
+  internal: CastTimestamp
+  cel: timestamp
+  status: mapped
+  params: [Castable]
+  return: timestamp
+
+- id: type_of
+  internal: TypeOf
+  cel: type
+  status: mapped
+  params: [T]
+  return: type
+
+- id: dyn
+  internal: Dyn
+  cel: dyn
+  status: mapped
+  notes: type-checker hint only; no runtime effect
+  params: [T]
+  return: dyn
+
+# ═══════════════════════════════════════════════════════════════════════
+#  CONDITIONAL
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: conditional
+  internal: Conditional
+  cel: "_?_:_"
+  status: mapped
+  params: [bool, T, T]
+  child_names: [condition, then_expr, else_expr]
+  return: T
+
+- id: case
+  internal: Case
+  status: mapped
+  special: case
+  notes: >
+    Multi-way conditional. Arms are (condition, result) pairs evaluated
+    in order; the first arm whose condition is true produces the result.
+    The default is returned if no arm matches. Desugared from SQL CASE
+    or nested if-then-else chains. Not a CEL native — lowered from
+    nested Conditional nodes or authored directly in the IR.
+    Special-cased in codegen: variable number of arms, not fixed arity.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  COLLECTION
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: index
+  internal: Index
+  cel: "_[_]"
+  status: mapped
+  params: ["list(T)", int]
+  return: T
+  notes: also works as map(K, V)[K] → V; overloaded
+
+- id: in
+  internal: In
+  cel: "@in"
+  substrait: { ext: functions_set, name: index_in }
+  status: mapped
+  params: [T, "list(T)"]
+  return: bool
+
+# ═══════════════════════════════════════════════════════════════════════
+#  LOGARITHMIC
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: ln
+  internal: Ln
+  substrait: { ext: functions_logarithmic, name: ln }
+  status: todo
+  params: [double]
+  return: double
+
+- id: log10
+  internal: Log10
+  substrait: { ext: functions_logarithmic, name: log10 }
+  status: todo
+  params: [double]
+  return: double
+
+- id: log2
+  substrait: { ext: functions_logarithmic, name: log2 }
+  status: discard
+- id: logb
+  substrait: { ext: functions_logarithmic, name: logb }
+  status: discard
+- id: log1p
+  substrait: { ext: functions_logarithmic, name: log1p }
+  status: discard
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ROUNDING
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: ceil
+  internal: Ceil
+  substrait: { ext: functions_rounding, name: ceil }
+  status: todo
+  params: [double]
+  return: double
+
+- id: floor
+  internal: Floor
+  substrait: { ext: functions_rounding, name: floor }
+  status: todo
+  params: [double]
+  return: double
+
+- id: round
+  internal: Round
+  substrait: { ext: functions_rounding, name: round }
+  status: todo
+  params: [double]
+  return: double
+
+# ═══════════════════════════════════════════════════════════════════════
+#  AGGREGATES (map to our AggregateFunction enum, not scalar IR nodes)
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: agg_count
+  internal: AggCount
+  substrait: { ext: functions_aggregate_generic, name: count }
+  status: mapped
+  aggregate: true
+
+- id: agg_sum
+  internal: AggSum
+  substrait: { ext: functions_arithmetic, name: sum }
+  status: mapped
+  aggregate: true
+  params: [Numeric]
+
+- id: agg_avg
+  internal: AggAvg
+  substrait: { ext: functions_arithmetic, name: avg }
+  status: mapped
+  aggregate: true
+  params: [Numeric]
+  return: double
+
+- id: agg_min
+  internal: AggMin
+  substrait: { ext: functions_arithmetic, name: min }
+  status: mapped
+  aggregate: true
+  params: ["Ordered:T"]
+  return: T
+
+- id: agg_max
+  internal: AggMax
+  substrait: { ext: functions_arithmetic, name: max }
+  status: mapped
+  aggregate: true
+  params: ["Ordered:T"]
+  return: T
+
+- id: agg_median
+  internal: AggMedian
+  substrait: { ext: functions_arithmetic, name: median }
+  status: mapped
+  aggregate: true
+  params: [Numeric]
+  return: double
+
+- id: agg_percentile
+  internal: AggPercentile
+  substrait: { ext: functions_arithmetic, name: quantile }
+  status: mapped
+  aggregate: true
+  params: [Numeric]
+  return: double
+
+- id: agg_count_distinct
+  internal: AggCountDistinct
+  substrait: { ext: functions_aggregate_approx, name: approx_count_distinct }
+  status: mapped
+  aggregate: true
+  params: [Comparable]
+  return: int
+  notes: may or may not be approximate depending on mode
+
+- id: agg_first
+  internal: AggFirst
+  substrait: { ext: functions_arithmetic, name: first_value }
+  status: mapped
+  aggregate: true
+  params: [T]
+  return: T
+
+- id: agg_last
+  internal: AggLast
+  substrait: { ext: functions_arithmetic, name: last_value }
+  status: mapped
+  aggregate: true
+  params: [T]
+  return: T
+
+- id: agg_std_dev
+  internal: AggStdDev
+  substrait: { ext: functions_arithmetic, name: std_dev }
+  status: todo
+  aggregate: true
+  params: [Numeric]
+  return: double
+
+- id: agg_variance
+  internal: AggVariance
+  substrait: { ext: functions_arithmetic, name: variance }
+  status: todo
+  aggregate: true
+  params: [Numeric]
+  return: double
+
+- id: agg_product
+  internal: AggProduct
+  substrait: { ext: functions_arithmetic, name: product }
+  status: todo
+  aggregate: true
+  params: [Numeric]
+
+- id: agg_nth_value
+  substrait: { ext: functions_arithmetic, name: nth_value }
+  status: todo
+  aggregate: true
+  params: [T, int]
+  return: T
+
+- id: sum0
+  substrait: { ext: functions_arithmetic, name: sum0 }
+  status: discard
+  notes: our accumulators handle empty-set semantics
+- id: corr
+  substrait: { ext: functions_arithmetic, name: corr }
+  status: discard
+- id: mode
+  substrait: { ext: functions_arithmetic, name: mode }
+  status: discard
+- id: any_value
+  substrait: { ext: functions_aggregate_generic, name: any_value }
+  status: discard
+
+# window — discarded
+- id: row_number
+  substrait: { ext: functions_arithmetic, name: row_number }
+  status: discard
+- id: rank
+  substrait: { ext: functions_arithmetic, name: rank }
+  status: discard
+- id: dense_rank
+  substrait: { ext: functions_arithmetic, name: dense_rank }
+  status: discard
+- id: percent_rank
+  substrait: { ext: functions_arithmetic, name: percent_rank }
+  status: discard
+- id: cume_dist
+  substrait: { ext: functions_arithmetic, name: cume_dist }
+  status: discard
+- id: ntile
+  substrait: { ext: functions_arithmetic, name: ntile }
+  status: discard
+- id: lead
+  substrait: { ext: functions_arithmetic, name: lead }
+  status: discard
+- id: lag
+  substrait: { ext: functions_arithmetic, name: lag }
+  status: discard
+
+# ═══════════════════════════════════════════════════════════════════════
+#  HIGHER-ORDER FUNCTIONS / CEL MACROS
+# ═══════════════════════════════════════════════════════════════════════
+# CEL desugars these into Comprehension nodes at parse time. In our IR
+# they are first-class HOF nodes carrying the collection, a bound
+# variable name, and a lambda body expression. This makes them
+# pattern-matchable for optimization and maps cleanly to the
+# corresponding Substrait HOFs.
+#
+# IR node shape for all HOFs:
+#   collection: ExprId    — the list/map being iterated
+#   binding: String       — the iteration variable name
+#   body: ExprId          — lambda body expression (references binding)
+
+- id: has
+  internal: Has
+  cel: has
+  status: mapped
+  hof: true
+  notes: >
+    Field presence test. In CEL, rewritten to Select with test_only=true.
+    In our IR, the operand is the select expression being tested.
+  params: [T]
+  return: bool
+
+- id: all
+  internal: All
+  cel: all
+  substrait: { ext: functions_list, name: all_match }
+  status: mapped
+  hof: true
+  params: ["list(T)"]
+  return: bool
+  lambda: { binding: T, return: bool }
+  notes: true if predicate holds for all elements; short-circuits on false
+
+- id: exists
+  internal: Exists
+  cel: exists
+  substrait: { ext: functions_list, name: any_match }
+  status: mapped
+  hof: true
+  params: ["list(T)"]
+  return: bool
+  lambda: { binding: T, return: bool }
+  notes: true if predicate holds for any element; short-circuits on true
+
+- id: exists_one
+  internal: ExistsOne
+  cel: exists_one
+  status: mapped
+  hof: true
+  params: ["list(T)"]
+  return: bool
+  lambda: { binding: T, return: bool }
+  notes: true if predicate holds for exactly one element; no short-circuit
+
+- id: filter
+  internal: Filter
+  cel: filter
+  substrait: { ext: functions_list, name: filter }
+  status: mapped
+  hof: true
+  params: ["list(T)"]
+  return: "list(T)"
+  lambda: { binding: T, return: bool }
+
+- id: map_transform
+  internal: MapTransform
+  cel: map
+  substrait: { ext: functions_list, name: transform }
+  status: mapped
+  hof: true
+  params: ["list(T)"]
+  return: "list(T2)"
+  lambda: { binding: T, return: T2 }
+  notes: renamed from "map" to avoid collision with the Map type
+
+- id: list_cardinality
+  substrait: { ext: functions_list, name: cardinality }
+  status: mapped
+  notes: handled by size
+
+- id: list_sort
+  substrait: { ext: functions_list, name: sort }
+  status: todo
+  params: ["list(Ordered:T)"]
+  return: "list(T)"
+
+# ═══════════════════════════════════════════════════════════════════════
+#  JSON (notochord extension; no CEL or Substrait equivalent)
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: json_parse
+  internal: JsonParse
+  status: todo
+  params: [string]
+  return: any
+  notes: >
+    Parse a JSON string into a dynamically-typed value. Returns Any;
+    caller must cast to a concrete type. JSON arrays become Array[Any],
+    JSON objects become Map[String, Any].
+
+- id: json_parse_struct
+  internal: JsonParseStruct
+  status: todo
+  params: [string]
+  return: struct
+  notes: >
+    Parse a JSON object string into a StructType. Field names in the JSON
+    become struct field names; types are inferred or declared by schema.
+    The common case: a varchar column containing an escaped JSON document.
+    Unlike JsonParse, the target struct type must be known at compile time.
+
+- id: json_stringify
+  internal: JsonStringify
+  status: todo
+  params: [T]
+  return: string
+  notes: serialize any value to a JSON string
+
+- id: json_extract
+  internal: JsonExtract
+  status: todo
+  params: [string, string]
+  return: any
+  notes: >
+    Extract a value from a JSON string by JSONPath-like expression.
+    First param is the JSON string, second is the path (e.g. "$.shipping.country").
+    Returns Any; avoids full parse when only one field is needed.
+
+- id: json_extract_string
+  internal: JsonExtractString
+  status: todo
+  params: [string, string]
+  return: string
+  notes: >
+    Like JsonExtract but always returns the result as a string,
+    even for numbers/booleans. Matches Trino's json_extract_scalar behavior.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  NETWORK (notochord extension)
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: cidr_contains
+  internal: CidrContains
+  status: todo
+  params: [string, string]
+  return: bool
+  notes: >
+    Tests whether an IP address (first param) falls within a CIDR block
+    (second param, e.g. "10.0.0.0/8"). Supports both IPv4 and IPv6.
+    Addresses are strings; we may introduce a native IP type later.
+
+- id: cidr_match
+  internal: CidrMatch
+  status: todo
+  params: [string, "list(string)"]
+  return: bool
+  notes: >
+    Tests whether an IP address matches any CIDR block in a list.
+    Sugar for exists(cidrs, c, CidrContains(ip, c)) but evaluable
+    with a radix tree for large block lists.
+
+- id: ip_to_int
+  internal: IpToInt
+  status: todo
+  params: [string]
+  return: uint
+  notes: parse IPv4 to u32 or IPv6 to u128; useful for range comparisons
+
+- id: int_to_ip
+  internal: IntToIp
+  status: todo
+  params: [uint]
+  return: string
+  notes: render integer as dotted-quad (v4) or colon-hex (v6)
+
+# ═══════════════════════════════════════════════════════════════════════
+#  NOTOCHORD-SPECIFIC (no CEL or Substrait equivalent)
+# ═══════════════════════════════════════════════════════════════════════
+
+- id: get_field_by_name
+  internal: GetFieldByName
+  status: mapped
+  notes: event field access by name (pre-resolution); return type resolved from event schema
+  params: []
+  return: T
+  properties: { field_name: string }
+
+- id: get_field_by_index
+  internal: GetFieldByIndex
+  status: mapped
+  notes: event field access by position (post-resolution); return type resolved from event schema
+  params: []
+  return: T
+  properties: { field_index: u32 }
+
+- id: get_child_by_name
+  internal: GetChildByName
+  status: mapped
+  notes: nested struct navigation by name; parent must be struct
+  params: ["struct(...)"]
+  return: T
+  properties: { child_name: string }
+
+- id: get_child_by_index
+  internal: GetChildByIndex
+  status: mapped
+  notes: nested struct navigation by position; parent must be struct
+  params: ["struct(...)", u32]
+  return: T
+  properties: { child_index: u32 }
+
+- id: get_column
+  internal: GetColumn
+  status: mapped
+  notes: reference to a materialized buffer column (post-compilation); type from column schema
+  params: []
+  return: T
+  properties: { column_id: string }
+
+# ═══════════════════════════════════════════════════════════════════════
+#  SKIPPED SUBSTRAIT EXTENSIONS
+# ═══════════════════════════════════════════════════════════════════════
+# functions_geometry.yaml — geospatial; out of scope
+# functions_arithmetic_decimal.yaml — decimal overloads; same internal ops
+# functions_rounding_decimal.yaml — decimal overloads; same internal ops
