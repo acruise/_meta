@@ -1,0 +1,16 @@
+[package]
+name = "meta-codegen"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+prost = "0.13"
+prost-types = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+[build-dependencies]
+prost-build = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"

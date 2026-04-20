@@ -1,0 +1,153 @@
+!!! THIS FILE IS A TEST SNAPSHOT — NOT SOURCE CODE !!!
+
+It contains the expected output of the LogExpr codegen (main.rs) run
+against function-catalog.yaml. It is compared by the codegen_snapshot
+test. If you change the catalog or the codegen, run:
+
+    cargo test -- codegen_snapshot
+
+and update this file with the new output if the diff is intentional.
+
+Hash lines (CATALOG_HASH, CODEGEN_HASH, EXPR_GEN_HASH) are excluded
+from comparison because they change whenever the codegen source is
+touched.
+
+--- EXPECTED OUTPUT BELOW THIS LINE ---
+// Generated from function-catalog.yaml — do not edit manually.
+// Re-generate with:
+//   cargo run -q -p meta-codegen -- function-catalog.yaml
+
+use crate::value::Value;
+
+/// Combined hash of the catalog + codegen that produced this file.
+/// Consumers that pattern-match on generated types should assert
+/// against this constant to detect silent schema drift.
+
+/// Generated — do not modify. See top of file.
+/// Logical expression tree — value-based, fully recursive.
+///
+/// Used for normalization and rewrite rules where nested
+/// pattern matching is the natural style.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum LogExpr {
+    Literal(Value),
+
+    LogicalOr { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    LogicalAnd { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    LogicalNot { operand: Box<LogExpr> },
+    /// both params must unify. null input → null output. See null_safe_equal for SQL IS NOT DISTINCT FROM.
+    Equal { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// both params must unify. null input → null output. See null_safe_not_equal for SQL IS DISTINCT FROM.
+    NotEqual { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    LessThan { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    LessOrEqual { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    GreaterThan { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    GreaterOrEqual { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// no CEL equivalent; lower to LogicalAnd(GreaterOrEqual(x, lo), LessOrEqual(x, hi))
+    Between { arg0: Box<LogExpr>, arg1: Box<LogExpr>, arg2: Box<LogExpr> },
+    /// SQL null-safe equality (null == null → true). Distinct from Equal which propagates null.
+    NullSafeEqual { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// SQL null-safe inequality (null != null → false). Distinct from NotEqual which propagates null.
+    NullSafeNotEqual { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// CEL uses has() macro for presence; we likely need this for nullable columns
+    IsNull { operand: Box<LogExpr> },
+    IsNotNull { operand: Box<LogExpr> },
+    /// useful for float column guards
+    IsNan { operand: Box<LogExpr> },
+    IsFinite { operand: Box<LogExpr> },
+    /// NaN is neither finite nor infinite; IsInfinite != LogicalNot(IsFinite)
+    IsInfinite { operand: Box<LogExpr> },
+    /// returns first non-null argument
+    Coalesce { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    Least { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    Greatest { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// also string/bytes/list concat and timestamp+duration in CEL
+    Add { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    Subtract { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    Multiply { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    Divide { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    Negate { operand: Box<LogExpr> },
+    Modulus { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    Abs { operand: Box<LogExpr> },
+    Power { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    Sqrt { operand: Box<LogExpr> },
+    Exp { operand: Box<LogExpr> },
+    Sign { operand: Box<LogExpr> },
+    Contains { receiver: Box<LogExpr>, arg: Box<LogExpr> },
+    StartsWith { receiver: Box<LogExpr>, arg: Box<LogExpr> },
+    EndsWith { receiver: Box<LogExpr>, arg: Box<LogExpr> },
+    /// CEL returns bool; Substrait returns the matched substring
+    RegexMatch { receiver: Box<LogExpr>, arg: Box<LogExpr> },
+    /// also maps to Substrait octet_length for bytes, and list/map cardinality
+    Size { operand: Box<LogExpr> },
+    Lower { operand: Box<LogExpr> },
+    Upper { operand: Box<LogExpr> },
+    Substring { arg0: Box<LogExpr>, arg1: Box<LogExpr>, arg2: Box<LogExpr> },
+    Replace { arg0: Box<LogExpr>, arg1: Box<LogExpr>, arg2: Box<LogExpr> },
+    Trim { operand: Box<LogExpr> },
+    StringSplit { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    StringPosition { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// in CEL this is the _+_ operator on strings
+    Concat { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// CEL splits into per-component methods; we unify as extract(component, ts)
+    TimestampExtract { operand: Box<LogExpr> },
+    /// useful for time bucketing in predicates
+    RoundTemporal { operand: Box<LogExpr> },
+    RoundCalendar { operand: Box<LogExpr> },
+    /// maps to coeffect reads_current_time in our model
+    CurrentTimestamp,
+    CastBool { operand: Box<LogExpr> },
+    CastInt { operand: Box<LogExpr> },
+    CastUint { operand: Box<LogExpr> },
+    CastDouble { operand: Box<LogExpr> },
+    CastString { operand: Box<LogExpr> },
+    CastBytes { operand: Box<LogExpr> },
+    CastDuration { operand: Box<LogExpr> },
+    CastTimestamp { operand: Box<LogExpr> },
+    TypeOf { operand: Box<LogExpr> },
+    /// type-checker hint only; no runtime effect
+    Dyn { operand: Box<LogExpr> },
+    Conditional { condition: Box<LogExpr>, then_expr: Box<LogExpr>, else_expr: Box<LogExpr> },
+    /// also works as map(K, V)[K] → V; overloaded
+    Index { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    In { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    Ln { operand: Box<LogExpr> },
+    Log10 { operand: Box<LogExpr> },
+    Ceil { operand: Box<LogExpr> },
+    Floor { operand: Box<LogExpr> },
+    Round { operand: Box<LogExpr> },
+    /// Parse a JSON string into a dynamically-typed value. Returns Any; caller must cast to a concrete type. JSON arrays become Array[Any], JSON objects become Map[String, Any].
+    JsonParse { operand: Box<LogExpr> },
+    /// Parse a JSON object string into a StructType. Field names in the JSON become struct field names; types are inferred or declared by schema. The common case: a varchar column containing an escaped JSON document. Unlike JsonParse, the target struct type must be known at compile time.
+    JsonParseStruct { operand: Box<LogExpr> },
+    /// serialize any value to a JSON string
+    JsonStringify { operand: Box<LogExpr> },
+    /// Extract a value from a JSON string by JSONPath-like expression. First param is the JSON string, second is the path (e.g. "$.shipping.country"). Returns Any; avoids full parse when only one field is needed.
+    JsonExtract { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// Like JsonExtract but always returns the result as a string, even for numbers/booleans. Matches Trino's json_extract_scalar behavior.
+    JsonExtractString { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// Tests whether an IP address (first param) falls within a CIDR block (second param, e.g. "10.0.0.0/8"). Supports both IPv4 and IPv6. Addresses are strings; we may introduce a native IP type later.
+    CidrContains { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// Tests whether an IP address matches any CIDR block in a list. Sugar for exists(cidrs, c, CidrContains(ip, c)) but evaluable with a radix tree for large block lists.
+    CidrMatch { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// parse IPv4 to u32 or IPv6 to u128; useful for range comparisons
+    IpToInt { operand: Box<LogExpr> },
+    /// render integer as dotted-quad (v4) or colon-hex (v6)
+    IntToIp { operand: Box<LogExpr> },
+
+    GetFieldByName { field_name: String },
+    GetFieldByIndex { field_index: u32 },
+    GetChildByName { child_name: String, operand: Box<LogExpr> },
+    GetChildByIndex { child_index: u32, lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    GetColumn { column_id: String },
+
+    Has { operand: Box<LogExpr> },
+    All { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
+    Exists { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
+    ExistsOne { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
+    Filter { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
+    MapTransform { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
+
+    /// Multi-way conditional (desugared CASE).
+    Case { arms: Vec<(Box<LogExpr>, Box<LogExpr>)>, default: Box<LogExpr> },
+}

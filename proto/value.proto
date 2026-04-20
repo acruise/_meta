@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package _meta.v1;
+package cluonflux.meta;
 
 // Value types for various projects, conforming to the Metamodel
 // design document.
