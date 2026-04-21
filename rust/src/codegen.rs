@@ -6,48 +6,48 @@ use std::fmt::Write;
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Deserialize)]
-struct CatalogEntry {
-    id: String,
-    internal: Option<String>,
-    cel: Option<String>,
-    substrait: Option<SubstraitRef>,
-    status: String,
+pub struct CatalogEntry {
+    pub id: String,
+    pub internal: Option<String>,
+    pub cel: Option<String>,
+    pub substrait: Option<SubstraitRef>,
+    pub status: String,
     #[serde(default)]
-    commutative: bool,
+    pub commutative: bool,
     #[serde(default)]
-    short_circuits: bool,
+    pub short_circuits: bool,
     #[serde(default)]
-    aggregate: bool,
+    pub aggregate: bool,
     #[serde(default)]
-    r#macro: bool,
+    pub r#macro: bool,
     #[serde(default)]
-    hof: bool,
-    lambda: Option<LambdaSpec>,
-    child_names: Option<Vec<String>>,
-    special: Option<String>,
-    null_semantics: Option<String>,
-    params: Option<Vec<String>>,
-    r#return: Option<String>,
-    receiver: Option<String>,
-    properties: Option<BTreeMap<String, String>>,
+    pub hof: bool,
+    pub lambda: Option<LambdaSpec>,
+    pub child_names: Option<Vec<String>>,
+    pub special: Option<String>,
+    pub null_semantics: Option<String>,
+    pub params: Option<Vec<String>>,
+    pub r#return: Option<String>,
+    pub receiver: Option<String>,
+    pub properties: Option<BTreeMap<String, String>>,
     #[serde(default)]
-    notes: Option<String>,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct LambdaSpec {
-    binding: String,
-    r#return: String,
+pub struct LambdaSpec {
+    pub binding: String,
+    pub r#return: String,
 }
 
 #[derive(Debug, Deserialize)]
-struct SubstraitRef {
-    ext: String,
-    name: String,
+pub struct SubstraitRef {
+    pub ext: String,
+    pub name: String,
 }
 
 impl CatalogEntry {
-    fn child_fields(&self) -> Vec<(&str, &str)> {
+    pub fn child_fields(&self) -> Vec<(&str, &str)> {
         if let Some(names) = &self.child_names {
             return names.iter().map(|n| (n.as_str(), "ExprId")).collect();
         }
@@ -83,6 +83,98 @@ impl CatalogEntry {
     }
 }
 
+pub struct ParsedCatalog {
+    pub entries: Vec<CatalogEntry>,
+}
+
+impl ParsedCatalog {
+    pub fn active(&self) -> Vec<&CatalogEntry> {
+        self.entries
+            .iter()
+            .filter(|e| {
+                e.internal.is_some()
+                    && (e.status == "mapped" || e.status == "todo" || e.status == "partial")
+            })
+            .collect()
+    }
+
+    pub fn scalars(&self) -> Vec<&CatalogEntry> {
+        self.active()
+            .into_iter()
+            .filter(|e| !e.aggregate && !e.r#macro && !e.hof && e.properties.is_none() && e.special.is_none())
+            .collect()
+    }
+
+    pub fn with_properties(&self) -> Vec<&CatalogEntry> {
+        self.active()
+            .into_iter()
+            .filter(|e| e.properties.is_some())
+            .collect()
+    }
+
+    pub fn aggregates(&self) -> Vec<&CatalogEntry> {
+        self.active().into_iter().filter(|e| e.aggregate).collect()
+    }
+
+    pub fn hofs(&self) -> Vec<&CatalogEntry> {
+        self.active().into_iter().filter(|e| e.hof).collect()
+    }
+}
+
+pub fn parse_catalog(yaml: &str) -> Result<ParsedCatalog, String> {
+    let entries: Vec<CatalogEntry> =
+        serde_yaml::from_str(yaml).map_err(|e| format!("Failed to parse YAML: {e}"))?;
+    Ok(ParsedCatalog { entries })
+}
+
+pub fn content_hash(content: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub fn combined_hash(catalog_hash: u64, codegen_hash: u64) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    catalog_hash.hash(&mut hasher);
+    codegen_hash.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub fn deduplicate_fields(fields: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for (name, _) in fields {
+        *counts.entry(name).or_insert(0) += 1;
+    }
+
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
+    fields
+        .iter()
+        .map(|(name, ty)| {
+            let count = counts[name];
+            if count > 1 {
+                let idx = seen.entry(name).or_insert(0);
+                let result = (format!("{name}{idx}"), ty.to_string());
+                *idx += 1;
+                result
+            } else {
+                (name.to_string(), ty.to_string())
+            }
+        })
+        .collect()
+}
+
+pub fn yaml_type_to_rust(t: &str) -> &str {
+    match t {
+        "string" => "String",
+        "int" => "i64",
+        "u32" => "u32",
+        "bool" => "bool",
+        _ => "String",
+    }
+}
+
+// --- LogExpr generation (used by _meta's build.rs) ---
+
 pub struct CodegenResult {
     pub code: String,
     pub scalar_count: usize,
@@ -91,47 +183,14 @@ pub struct CodegenResult {
 }
 
 pub fn generate(yaml: &str, codegen_source: &str) -> Result<CodegenResult, String> {
-    let entries: Vec<CatalogEntry> =
-        serde_yaml::from_str(yaml).map_err(|e| format!("Failed to parse YAML: {e}"))?;
+    let catalog = parse_catalog(yaml)?;
+    let scalars = catalog.scalars();
+    let with_properties = catalog.with_properties();
+    let hofs = catalog.hofs();
 
-    let active: Vec<&CatalogEntry> = entries
-        .iter()
-        .filter(|e| {
-            e.internal.is_some()
-                && (e.status == "mapped" || e.status == "todo" || e.status == "partial")
-        })
-        .collect();
-
-    let scalars: Vec<&CatalogEntry> = active
-        .iter()
-        .filter(|e| !e.aggregate && !e.r#macro && !e.hof && e.properties.is_none() && e.special.is_none())
-        .copied()
-        .collect();
-
-    let with_properties: Vec<&CatalogEntry> = active
-        .iter()
-        .filter(|e| e.properties.is_some())
-        .copied()
-        .collect();
-
-    let hofs: Vec<&CatalogEntry> = active.iter().filter(|e| e.hof).copied().collect();
-
-    let catalog_hash = {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        yaml.hash(&mut hasher);
-        hasher.finish()
-    };
-    let codegen_hash = {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        codegen_source.hash(&mut hasher);
-        hasher.finish()
-    };
-    let combined_hash = {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        catalog_hash.hash(&mut hasher);
-        codegen_hash.hash(&mut hasher);
-        hasher.finish()
-    };
+    let catalog_hash = content_hash(yaml);
+    let codegen_hash = content_hash(codegen_source);
+    let combined = combined_hash(catalog_hash, codegen_hash);
 
     let mut out = String::new();
 
@@ -146,7 +205,7 @@ pub fn generate(yaml: &str, codegen_source: &str) -> Result<CodegenResult, Strin
     writeln!(out, "/// Combined hash of the catalog + codegen that produced this file.").unwrap();
     writeln!(out, "/// Consumers that pattern-match on generated types should assert").unwrap();
     writeln!(out, "/// against this constant to detect silent schema drift.").unwrap();
-    writeln!(out, "pub const EXPR_GEN_HASH: u64 = 0x{combined_hash:016x};").unwrap();
+    writeln!(out, "pub const EXPR_GEN_HASH: u64 = 0x{combined:016x};").unwrap();
     writeln!(out).unwrap();
 
     emit_logical_ir(&mut out, &scalars, &with_properties, &hofs);
@@ -244,37 +303,4 @@ fn emit_logical_ir(
     writeln!(out, "    Case {{ arms: Vec<(Box<LogExpr>, Box<LogExpr>)>, default: Box<LogExpr> }},").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
-}
-
-fn deduplicate_fields(fields: &[(&str, &str)]) -> Vec<(String, String)> {
-    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for (name, _) in fields {
-        *counts.entry(name).or_insert(0) += 1;
-    }
-
-    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
-    fields
-        .iter()
-        .map(|(name, ty)| {
-            let count = counts[name];
-            if count > 1 {
-                let idx = seen.entry(name).or_insert(0);
-                let result = (format!("{name}{idx}"), ty.to_string());
-                *idx += 1;
-                result
-            } else {
-                (name.to_string(), ty.to_string())
-            }
-        })
-        .collect()
-}
-
-fn yaml_type_to_rust(t: &str) -> &str {
-    match t {
-        "string" => "String",
-        "int" => "i64",
-        "u32" => "u32",
-        "bool" => "bool",
-        _ => "String",
-    }
 }
