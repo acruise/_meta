@@ -9,6 +9,7 @@ prost = "0.13"
 prost-types = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+cel-parser = "0.8"
 
 [build-dependencies]
 prost-build = "0.13"

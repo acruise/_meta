@@ -31,6 +31,8 @@ pub struct CatalogEntry {
     pub receiver: Option<String>,
     pub properties: Option<BTreeMap<String, String>>,
     #[serde(default)]
+    pub coeffects: Vec<String>,
+    #[serde(default)]
     pub notes: Option<String>,
 }
 
@@ -299,8 +301,174 @@ fn emit_logical_ir(
     }
 
     writeln!(out).unwrap();
+    writeln!(out, "    /// Opaque CEL sub-expression that could not be raised to a native IR node.").unwrap();
+    writeln!(out, "    /// The `source` field is the reconstructed CEL text, kept for informational/").unwrap();
+    writeln!(out, "    /// debugging purposes ONLY — it must NEVER be re-parsed for execution.").unwrap();
+    writeln!(out, "    /// The authoritative representation is the compiled program in the side table.").unwrap();
+    writeln!(out, "    CelUdf {{ source: String, args: Vec<Box<LogExpr>> }},").unwrap();
+    writeln!(out).unwrap();
     writeln!(out, "    /// Multi-way conditional (desugared CASE).").unwrap();
     writeln!(out, "    Case {{ arms: Vec<(Box<LogExpr>, Box<LogExpr>)>, default: Box<LogExpr> }},").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    emit_intrinsic_coeffects(out, scalars, notochord_ops, hofs);
+    emit_transitive_coeffects(out);
+}
+
+fn emit_intrinsic_coeffects(
+    out: &mut String,
+    scalars: &[&CatalogEntry],
+    notochord_ops: &[&CatalogEntry],
+    hofs: &[&CatalogEntry],
+) {
+    gen_warning(out);
+    writeln!(out, "impl LogExpr {{").unwrap();
+    writeln!(out, "    pub fn intrinsic_coeffects(&self) -> crate::coeffects::Coeffects {{").unwrap();
+    writeln!(out, "        use crate::coeffects::Coeffects;").unwrap();
+    writeln!(out, "        match self {{").unwrap();
+
+    writeln!(out, "            Self::GetFieldByName {{ .. }} | Self::GetFieldByIndex {{ .. }} => Coeffects::event_data(),").unwrap();
+    writeln!(out, "            Self::CelUdf {{ .. }} => Coeffects::all(),").unwrap();
+
+    for e in scalars.iter().chain(notochord_ops.iter()).chain(hofs.iter()) {
+        if e.coeffects.is_empty() {
+            continue;
+        }
+        let name = e.internal.as_ref().unwrap();
+        // Build a chain of union() calls from the declared coeffects
+        let mut parts: Vec<String> = Vec::new();
+        if e.coeffects.contains(&"reads_event_data".to_string()) {
+            parts.push("Coeffects::event_data()".to_string());
+        }
+        if e.coeffects.contains(&"reads_current_time".to_string()) {
+            parts.push("Coeffects::current_time(0)".to_string());
+        }
+        if e.coeffects.contains(&"reads_aggregates".to_string()) {
+            parts.push("Coeffects::aggregates()".to_string());
+        }
+        if e.coeffects.contains(&"reads_enrichment".to_string()) {
+            parts.push("Coeffects::enrichment()".to_string());
+        }
+        if parts.is_empty() {
+            continue;
+        }
+        let expr = parts.into_iter().reduce(|a, b| format!("{a}.union({b})")).unwrap();
+        writeln!(out, "            Self::{name} {{ .. }} => {expr},").unwrap();
+    }
+
+    writeln!(out, "            _ => Coeffects::default(),").unwrap();
+    writeln!(out, "        }}").unwrap();
+    writeln!(out, "    }}").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+}
+
+fn emit_transitive_coeffects(out: &mut String) {
+    gen_warning(out);
+    writeln!(out, "pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::Coeffects {{").unwrap();
+    writeln!(out, "    let mut result = expr.intrinsic_coeffects();").unwrap();
+    writeln!(out, "    match expr {{").unwrap();
+    // Recursively union children. We enumerate the structural shapes.
+    writeln!(out, "        LogExpr::Literal(_) => {{}},").unwrap();
+    writeln!(out, "        LogExpr::GetFieldByName {{ .. }} | LogExpr::GetFieldByIndex {{ .. }} | LogExpr::GetColumn {{ .. }} | LogExpr::CurrentTimestamp => {{}},").unwrap();
+
+    // Unary: one child named `operand`
+    writeln!(out, "        LogExpr::LogicalNot {{ operand }} | LogExpr::Negate {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::IsNull {{ operand }} | LogExpr::IsNotNull {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::IsNan {{ operand }} | LogExpr::IsFinite {{ operand }} | LogExpr::IsInfinite {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::Abs {{ operand }} | LogExpr::Sqrt {{ operand }} | LogExpr::Exp {{ operand }} | LogExpr::Sign {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::Size {{ operand }} | LogExpr::Lower {{ operand }} | LogExpr::Upper {{ operand }} | LogExpr::Trim {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::TimestampExtract {{ operand }} | LogExpr::RoundTemporal {{ operand }} | LogExpr::RoundCalendar {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::CastBool {{ operand }} | LogExpr::CastInt {{ operand }} | LogExpr::CastUint {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::CastDouble {{ operand }} | LogExpr::CastString {{ operand }} | LogExpr::CastBytes {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::CastDuration {{ operand }} | LogExpr::CastTimestamp {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::TypeOf {{ operand }} | LogExpr::Dyn {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::Ln {{ operand }} | LogExpr::Log10 {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::Ceil {{ operand }} | LogExpr::Floor {{ operand }} | LogExpr::Round {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::JsonParse {{ operand }} | LogExpr::JsonParseStruct {{ operand }} | LogExpr::JsonStringify {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::IpToInt {{ operand }} | LogExpr::IntToIp {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::Has {{ operand }}").unwrap();
+    writeln!(out, "        => {{ result = result.union(transitive_coeffects(operand)); }},").unwrap();
+
+    // Binary: lhs/rhs
+    writeln!(out, "        LogExpr::LogicalOr {{ lhs, rhs }} | LogExpr::LogicalAnd {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::Equal {{ lhs, rhs }} | LogExpr::NotEqual {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::LessThan {{ lhs, rhs }} | LogExpr::LessOrEqual {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::GreaterThan {{ lhs, rhs }} | LogExpr::GreaterOrEqual {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::NullSafeEqual {{ lhs, rhs }} | LogExpr::NullSafeNotEqual {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::Coalesce {{ lhs, rhs }} | LogExpr::Least {{ lhs, rhs }} | LogExpr::Greatest {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::Add {{ lhs, rhs }} | LogExpr::Subtract {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::Multiply {{ lhs, rhs }} | LogExpr::Divide {{ lhs, rhs }} | LogExpr::Modulus {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::Power {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::StringSplit {{ lhs, rhs }} | LogExpr::StringPosition {{ lhs, rhs }} | LogExpr::Concat {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::Index {{ lhs, rhs }} | LogExpr::In {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::JsonExtract {{ lhs, rhs }} | LogExpr::JsonExtractString {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::CidrContains {{ lhs, rhs }} | LogExpr::CidrMatch {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        => {{").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(lhs));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(rhs));").unwrap();
+    writeln!(out, "        }},").unwrap();
+
+    // Receiver + arg
+    writeln!(out, "        LogExpr::Contains {{ receiver, arg }} | LogExpr::StartsWith {{ receiver, arg }}").unwrap();
+    writeln!(out, "        | LogExpr::EndsWith {{ receiver, arg }} | LogExpr::RegexMatch {{ receiver, arg }}").unwrap();
+    writeln!(out, "        => {{").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(receiver));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(arg));").unwrap();
+    writeln!(out, "        }},").unwrap();
+
+    // Ternary
+    writeln!(out, "        LogExpr::Between {{ arg0, arg1, arg2 }} | LogExpr::Substring {{ arg0, arg1, arg2 }}").unwrap();
+    writeln!(out, "        | LogExpr::Replace {{ arg0, arg1, arg2 }}").unwrap();
+    writeln!(out, "        => {{").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(arg0));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(arg1));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(arg2));").unwrap();
+    writeln!(out, "        }},").unwrap();
+
+    writeln!(out, "        LogExpr::Conditional {{ condition, then_expr, else_expr }} => {{").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(condition));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(then_expr));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(else_expr));").unwrap();
+    writeln!(out, "        }},").unwrap();
+
+    // GetChildByName has operand
+    writeln!(out, "        LogExpr::GetChildByName {{ operand, .. }} => {{").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(operand));").unwrap();
+    writeln!(out, "        }},").unwrap();
+    writeln!(out, "        LogExpr::GetChildByIndex {{ lhs, rhs, .. }} => {{").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(lhs));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(rhs));").unwrap();
+    writeln!(out, "        }},").unwrap();
+
+    // HOFs: collection + body
+    writeln!(out, "        LogExpr::All {{ collection, body, .. }} | LogExpr::Exists {{ collection, body, .. }}").unwrap();
+    writeln!(out, "        | LogExpr::ExistsOne {{ collection, body, .. }} | LogExpr::Filter {{ collection, body, .. }}").unwrap();
+    writeln!(out, "        | LogExpr::MapTransform {{ collection, body, .. }}").unwrap();
+    writeln!(out, "        => {{").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(collection));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(body));").unwrap();
+    writeln!(out, "        }},").unwrap();
+
+    // CelUdf: args
+    writeln!(out, "        LogExpr::CelUdf {{ args, .. }} => {{").unwrap();
+    writeln!(out, "            for arg in args {{").unwrap();
+    writeln!(out, "                result = result.union(transitive_coeffects(arg));").unwrap();
+    writeln!(out, "            }}").unwrap();
+    writeln!(out, "        }},").unwrap();
+
+    // Case: arms + default
+    writeln!(out, "        LogExpr::Case {{ arms, default }} => {{").unwrap();
+    writeln!(out, "            for (cond, body) in arms {{").unwrap();
+    writeln!(out, "                result = result.union(transitive_coeffects(cond));").unwrap();
+    writeln!(out, "                result = result.union(transitive_coeffects(body));").unwrap();
+    writeln!(out, "            }}").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(default));").unwrap();
+    writeln!(out, "        }},").unwrap();
+
+    writeln!(out, "    }}").unwrap();
+    writeln!(out, "    result").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 }

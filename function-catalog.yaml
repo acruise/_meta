@@ -656,7 +656,7 @@
   status: todo
   params: []
   return: timestamp
-  notes: maps to coeffect reads_current_time in our model
+  coeffects: [reads_current_time]
 
 - id: duration_multiply
   substrait: { ext: functions_datetime, name: multiply }

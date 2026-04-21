@@ -2,7 +2,7 @@ use crate::expr_gen::LogExpr;
 use crate::value::{Value, ValueKind};
 
 const _: () = assert!(
-    crate::expr_gen::EXPR_GEN_HASH == 0xb10d34e431665491,
+    crate::expr_gen::EXPR_GEN_HASH == 0x84426084dd59ef91,
     "type_check.rs needs review — EXPR_GEN_HASH changed"
 );
 
@@ -235,6 +235,13 @@ impl TypeChecker {
                 let (rhs, rhs_kind) = self.check(rhs)?;
                 let (lhs, rhs, kind) = self.unify_pair(lhs, lhs_kind, rhs, rhs_kind, "coalesce")?;
                 Ok((LogExpr::Coalesce { lhs: Box::new(lhs), rhs: Box::new(rhs) }, kind))
+            }
+
+            LogExpr::CelUdf { source, args } => {
+                let checked_args: Vec<Box<LogExpr>> = args.iter()
+                    .map(|a| self.check(a).map(|(e, _)| Box::new(e)))
+                    .collect::<Result<_, _>>()?;
+                Ok((LogExpr::CelUdf { source: source.clone(), args: checked_args }, ValueKind::Null))
             }
 
             _ => Ok((expr.clone(), ValueKind::Null)),
