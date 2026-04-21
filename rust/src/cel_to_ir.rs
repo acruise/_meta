@@ -477,6 +477,7 @@ mod tests {
         LogExpr::Literal(Value::String(s.into()))
     }
 
+    /// Integer literals become Value::I64 in the IR.
     #[test]
     fn literal_int() {
         let t = cel_to_log_expr("42").unwrap();
@@ -484,6 +485,7 @@ mod tests {
         assert_eq!(t.status, TranslationStatus::FullyRaised);
     }
 
+    /// CEL single-quoted strings become Value::String.
     #[test]
     fn literal_string() {
         let t = cel_to_log_expr("'hello'").unwrap();
@@ -491,17 +493,22 @@ mod tests {
         assert_eq!(t.status, TranslationStatus::FullyRaised);
     }
 
+    /// Boolean literals map directly.
     #[test]
     fn literal_bool() {
         let t = cel_to_log_expr("true").unwrap();
         assert_eq!(t.expr, LogExpr::Literal(Value::Bool(true)));
     }
 
+    /// A bare identifier becomes a field reference — the event schema
+    /// resolves it later during type checking.
     #[test]
     fn field_access() {
         assert_eq!(cel_to_log_expr("age").unwrap().expr, field("age"));
     }
 
+    /// Relational operators map to the corresponding LogExpr variant.
+    /// The whole expression is fully raised (no CelUdf nodes).
     #[test]
     fn simple_comparison() {
         let t = cel_to_log_expr("age > 18").unwrap();
@@ -512,6 +519,8 @@ mod tests {
         assert_eq!(t.status, TranslationStatus::FullyRaised);
     }
 
+    /// `&&` composes a field reference (used as bool) with a comparison.
+    /// Both sides are fully raised; the conjunction itself is native IR.
     #[test]
     fn boolean_logic() {
         let t = cel_to_log_expr("active && score > 50").unwrap();
@@ -525,6 +534,8 @@ mod tests {
         assert_eq!(t.status, TranslationStatus::FullyRaised);
     }
 
+    /// CEL method-call syntax: `receiver.method(arg)`. The receiver
+    /// becomes the `receiver` field, the argument becomes `arg`.
     #[test]
     fn string_method() {
         let t = cel_to_log_expr("email.contains('admin')").unwrap();
@@ -534,6 +545,7 @@ mod tests {
         });
     }
 
+    /// CEL ternary `cond ? then : else` maps to LogExpr::Conditional.
     #[test]
     fn ternary() {
         let t = cel_to_log_expr("vip ? 'premium' : 'standard'").unwrap();
@@ -544,6 +556,9 @@ mod tests {
         });
     }
 
+    /// Dotted member access chains become nested GetChildByName nodes,
+    /// innermost first: `payload.shipping.country` →
+    /// GetChildByName("country", GetChildByName("shipping", GetFieldByName("payload")))
     #[test]
     fn nested_member_access() {
         let t = cel_to_log_expr("payload.shipping.country").unwrap();
@@ -556,6 +571,8 @@ mod tests {
         });
     }
 
+    /// CEL cast functions (`int`, `double`, `string`, etc.) map to
+    /// the corresponding Cast* LogExpr variant.
     #[test]
     fn cast_function() {
         let t = cel_to_log_expr("int(score)").unwrap();
@@ -563,6 +580,8 @@ mod tests {
         assert_eq!(t.status, TranslationStatus::FullyRaised);
     }
 
+    /// CEL `in` operator with a list literal. The list becomes a
+    /// Value::Array and the whole thing is a native In node.
     #[test]
     fn in_with_list() {
         let t = cel_to_log_expr("status in ['active', 'pending']").unwrap();
@@ -575,6 +594,8 @@ mod tests {
         });
     }
 
+    /// Arithmetic operators map directly. Type checking (int vs float
+    /// widening, string concatenation overloading) happens later.
     #[test]
     fn arithmetic() {
         let t = cel_to_log_expr("price + tax").unwrap();
@@ -584,24 +605,29 @@ mod tests {
         });
     }
 
+    /// Logical negation: `!` maps to LogicalNot.
     #[test]
     fn negation() {
         let t = cel_to_log_expr("!active").unwrap();
         assert_eq!(t.expr, LogExpr::LogicalNot { operand: boxed(field("active")) });
     }
 
+    /// Unary minus maps to Negate (arithmetic negation, not logical).
     #[test]
     fn unary_minus() {
         let t = cel_to_log_expr("-amount").unwrap();
         assert_eq!(t.expr, LogExpr::Negate { operand: boxed(field("amount")) });
     }
 
+    /// `size()` as a free function (not a method) with one argument.
     #[test]
     fn size_function() {
         let t = cel_to_log_expr("size(name)").unwrap();
         assert_eq!(t.expr, LogExpr::Size { operand: boxed(field("name")) });
     }
 
+    /// Index access `items[0]` becomes an Index node with the collection
+    /// as lhs and the index expression as rhs.
     #[test]
     fn index_access() {
         let t = cel_to_log_expr("items[0]").unwrap();
@@ -611,6 +637,7 @@ mod tests {
         });
     }
 
+    /// Equality comparison with a string literal.
     #[test]
     fn equality() {
         let t = cel_to_log_expr("status == 'active'").unwrap();
@@ -620,12 +647,17 @@ mod tests {
         });
     }
 
+    /// A compound expression mixing comparison and string methods.
+    /// Everything is in the catalog, so the result is fully raised.
     #[test]
     fn complex_nested() {
         let t = cel_to_log_expr("age >= 18 && email.endsWith('@example.com')").unwrap();
         assert_eq!(t.status, TranslationStatus::FullyRaised);
     }
 
+    /// A function not in our catalog becomes an opaque CelUdf node.
+    /// The source text is reconstructed from the AST for debugging.
+    /// The args are the variable references the CEL runtime will need.
     #[test]
     fn unknown_function_becomes_udf() {
         let t = cel_to_log_expr("frobnicate(x, y)").unwrap();
@@ -639,6 +671,11 @@ mod tests {
         }
     }
 
+    /// The key partial-raising test: one side of an && is fully raised
+    /// (age >= 18 → GreaterOrEqual), the other side is an unknown
+    /// function that becomes a CelUdf leaf. The conjunction itself is
+    /// native IR, so the optimizer can still reason about short-circuit
+    /// ordering — e.g. put the cheap field comparison first.
     #[test]
     fn partial_raising() {
         let t = cel_to_log_expr("age >= 18 && custom_score(payload)").unwrap();
@@ -652,12 +689,17 @@ mod tests {
         }
     }
 
+    /// When every part of the expression maps to a catalog function,
+    /// the status is FullyRaised — no CelUdf nodes anywhere in the tree.
     #[test]
     fn fully_raised_has_no_udfs() {
         let t = cel_to_log_expr("size(name) > 0").unwrap();
         assert_eq!(t.status, TranslationStatus::FullyRaised);
     }
 
+    /// Nested ternaries are how CEL represents multi-way conditionals
+    /// (like SQL CASE). Each level becomes a Conditional node. A later
+    /// normalization pass could collapse these into a single Case node.
     #[test]
     fn nested_ternary() {
         let t = cel_to_log_expr(
@@ -667,6 +709,8 @@ mod tests {
         assert!(matches!(t.expr, LogExpr::Conditional { .. }));
     }
 
+    /// A method call we don't recognize (toUpperCase is not in our
+    /// catalog) becomes an opaque CelUdf. The CEL runtime handles it.
     #[test]
     fn unknown_method_becomes_udf() {
         let t = cel_to_log_expr("name.toUpperCase()").unwrap();
@@ -674,6 +718,26 @@ mod tests {
         assert!(matches!(t.expr, LogExpr::CelUdf { .. }));
     }
 
+    /// Verify that `_` is a valid CEL identifier, so `_.enrichments.foo`
+    /// parses as nested member access rooted at `_`.
+    #[test]
+    fn underscore_root_parses() {
+        let t = cel_to_log_expr("_.enrichments.user_profile.tier").unwrap();
+        assert_eq!(t.expr, LogExpr::GetChildByName {
+            child_name: "tier".into(),
+            operand: boxed(LogExpr::GetChildByName {
+                child_name: "user_profile".into(),
+                operand: boxed(LogExpr::GetChildByName {
+                    child_name: "enrichments".into(),
+                    operand: boxed(field("_")),
+                }),
+            }),
+        });
+        assert_eq!(t.status, TranslationStatus::FullyRaised);
+    }
+
+    /// A bare literal has no coeffects — it's pure and can be memoized
+    /// forever.
     #[test]
     fn coeffects_pure_literal() {
         use crate::expr_gen::transitive_coeffects;
@@ -682,6 +746,9 @@ mod tests {
         assert!(c.is_pure());
     }
 
+    /// Field access introduces reads_event_data. The comparison operator
+    /// is pure, but its child reads a field, so the transitive closure
+    /// inherits reads_event_data. No enrichment or time coeffects.
     #[test]
     fn coeffects_field_access_reads_event() {
         use crate::expr_gen::transitive_coeffects;
@@ -692,6 +759,9 @@ mod tests {
         assert!(c.reads_current_time.is_none());
     }
 
+    /// A CelUdf node conservatively assumes all coeffects — we don't
+    /// know what the opaque CEL function does, so we assume the worst.
+    /// One CelUdf anywhere in the tree poisons the whole expression.
     #[test]
     fn coeffects_udf_is_conservative() {
         use crate::expr_gen::transitive_coeffects;
@@ -701,6 +771,9 @@ mod tests {
         assert_eq!(c, Coeffects::all());
     }
 
+    /// Coeffects propagate through pure operators: `size(name)` reads
+    /// event data (via `name`), and `+` is pure, so the whole expression
+    /// reads event data. No time coeffect because neither side reads time.
     #[test]
     fn coeffects_nested_propagates() {
         use crate::expr_gen::transitive_coeffects;
