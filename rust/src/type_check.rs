@@ -2,7 +2,7 @@ use crate::expr_gen::LogExpr;
 use crate::value::{Value, ValueKind};
 
 const _: () = assert!(
-    crate::expr_gen::EXPR_GEN_HASH == 0x84426084dd59ef91,
+    crate::expr_gen::EXPR_GEN_HASH == 0x6ebdb63aea14ca1f,
     "type_check.rs needs review — EXPR_GEN_HASH changed"
 );
 

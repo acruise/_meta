@@ -360,6 +360,22 @@ fn emit_intrinsic_coeffects(
     writeln!(out, "            _ => Coeffects::default(),").unwrap();
     writeln!(out, "        }}").unwrap();
     writeln!(out, "    }}").unwrap();
+    writeln!(out).unwrap();
+
+    // is_commutative()
+    writeln!(out, "    pub fn is_commutative(&self) -> bool {{").unwrap();
+    writeln!(out, "        matches!(self,").unwrap();
+    let commutative: Vec<&str> = scalars.iter()
+        .filter(|e| e.commutative)
+        .filter_map(|e| e.internal.as_deref())
+        .collect();
+    for (i, name) in commutative.iter().enumerate() {
+        let sep = if i + 1 < commutative.len() { " |" } else { "" };
+        writeln!(out, "            Self::{name} {{ .. }}{sep}").unwrap();
+    }
+    writeln!(out, "        )").unwrap();
+    writeln!(out, "    }}").unwrap();
+
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 }

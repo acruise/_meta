@@ -3,6 +3,7 @@ pub mod coeffects;
 pub mod codegen;
 pub mod type_check;
 pub mod cel_to_ir;
+pub mod normalizer;
 
 pub mod expr_gen {
     include!(concat!(env!("OUT_DIR"), "/expr_gen.rs"));
