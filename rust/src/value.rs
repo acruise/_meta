@@ -111,6 +111,28 @@ impl Value {
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
+
+    pub fn is_zero(&self) -> bool {
+        match self {
+            Value::I8(0) | Value::I16(0) | Value::I32(0) | Value::I64(0)
+            | Value::U8(0) | Value::U16(0) | Value::U32(0) | Value::U64(0)
+            | Value::DecimalI64(0) | Value::DecimalI128(0) => true,
+            Value::F32(v) => *v == 0.0,
+            Value::F64(v) => *v == 0.0,
+            _ => false,
+        }
+    }
+
+    pub fn is_one(&self) -> bool {
+        match self {
+            Value::I8(1) | Value::I16(1) | Value::I32(1) | Value::I64(1)
+            | Value::U8(1) | Value::U16(1) | Value::U32(1) | Value::U64(1)
+            | Value::DecimalI64(1) | Value::DecimalI128(1) => true,
+            Value::F32(v) => *v == 1.0,
+            Value::F64(v) => *v == 1.0,
+            _ => false,
+        }
+    }
 }
 
 impl Eq for Value {}

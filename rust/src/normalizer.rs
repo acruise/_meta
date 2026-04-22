@@ -32,6 +32,55 @@ pub fn normalize(expr: &LogExpr) -> LogExpr {
             LogExpr::LogicalNot { operand: Box::new(inner) }
         }
 
+        // Additive identity: x + 0 → x, 0 + x → x
+        LogExpr::Add { lhs, rhs } => {
+            let l = normalize(lhs);
+            let r = normalize(rhs);
+            if let LogExpr::Literal(v) = &r { if v.is_zero() { return l; } }
+            if let LogExpr::Literal(v) = &l { if v.is_zero() { return r; } }
+            sort_binary(l, r, |l, r| LogExpr::Add { lhs: l, rhs: r })
+        }
+
+        // Multiplicative identity: x * 1 → x, 1 * x → x
+        // Multiplicative zero: x * 0 → 0
+        LogExpr::Multiply { lhs, rhs } => {
+            let l = normalize(lhs);
+            let r = normalize(rhs);
+            if let LogExpr::Literal(v) = &r { if v.is_one() { return l; } }
+            if let LogExpr::Literal(v) = &l { if v.is_one() { return r; } }
+            if let LogExpr::Literal(v) = &r { if v.is_zero() { return r; } }
+            if let LogExpr::Literal(v) = &l { if v.is_zero() { return l; } }
+            sort_binary(l, r, |l, r| LogExpr::Multiply { lhs: l, rhs: r })
+        }
+
+        // Subtractive identity: x - 0 → x
+        LogExpr::Subtract { lhs, rhs } => {
+            let l = normalize(lhs);
+            let r = normalize(rhs);
+            if let LogExpr::Literal(v) = &r { if v.is_zero() { return l; } }
+            LogExpr::Subtract { lhs: Box::new(l), rhs: Box::new(r) }
+        }
+
+        // Boolean identities: x && true → x, x || false → x
+        LogExpr::LogicalAnd { lhs, rhs } => {
+            let l = normalize(lhs);
+            let r = normalize(rhs);
+            if let LogExpr::Literal(Value::Bool(true)) = &r { return l; }
+            if let LogExpr::Literal(Value::Bool(true)) = &l { return r; }
+            if let LogExpr::Literal(Value::Bool(false)) = &r { return r; }
+            if let LogExpr::Literal(Value::Bool(false)) = &l { return l; }
+            sort_binary(l, r, |l, r| LogExpr::LogicalAnd { lhs: l, rhs: r })
+        }
+        LogExpr::LogicalOr { lhs, rhs } => {
+            let l = normalize(lhs);
+            let r = normalize(rhs);
+            if let LogExpr::Literal(Value::Bool(false)) = &r { return l; }
+            if let LogExpr::Literal(Value::Bool(false)) = &l { return r; }
+            if let LogExpr::Literal(Value::Bool(true)) = &r { return r; }
+            if let LogExpr::Literal(Value::Bool(true)) = &l { return l; }
+            sort_binary(l, r, |l, r| LogExpr::LogicalOr { lhs: l, rhs: r })
+        }
+
         _ if expr.is_commutative() => normalize_commutative(expr),
 
         _ => normalize_children(expr),
@@ -315,5 +364,105 @@ mod tests {
             }
             other => panic!("expected LogicalAnd, got {other:?}"),
         }
+    }
+
+    /// x + 0 → x
+    #[test]
+    fn additive_identity() {
+        let expr = LogExpr::Add {
+            lhs: Box::new(field("x")),
+            rhs: Box::new(LogExpr::Literal(Value::I64(0))),
+        };
+        assert_eq!(normalize(&expr), field("x"));
+    }
+
+    /// 0 + x → x (commutative identity)
+    #[test]
+    fn additive_identity_reversed() {
+        let expr = LogExpr::Add {
+            lhs: Box::new(LogExpr::Literal(Value::I64(0))),
+            rhs: Box::new(field("x")),
+        };
+        assert_eq!(normalize(&expr), field("x"));
+    }
+
+    /// x * 1 → x
+    #[test]
+    fn multiplicative_identity() {
+        let expr = LogExpr::Multiply {
+            lhs: Box::new(field("x")),
+            rhs: Box::new(LogExpr::Literal(Value::I64(1))),
+        };
+        assert_eq!(normalize(&expr), field("x"));
+    }
+
+    /// x * 0 → 0
+    #[test]
+    fn multiplicative_zero() {
+        let expr = LogExpr::Multiply {
+            lhs: Box::new(field("x")),
+            rhs: Box::new(LogExpr::Literal(Value::I64(0))),
+        };
+        assert_eq!(normalize(&expr), LogExpr::Literal(Value::I64(0)));
+    }
+
+    /// x - 0 → x
+    #[test]
+    fn subtractive_identity() {
+        let expr = LogExpr::Subtract {
+            lhs: Box::new(field("x")),
+            rhs: Box::new(LogExpr::Literal(Value::I64(0))),
+        };
+        assert_eq!(normalize(&expr), field("x"));
+    }
+
+    /// x && true → x
+    #[test]
+    fn logical_and_true_identity() {
+        let expr = LogExpr::LogicalAnd {
+            lhs: Box::new(field("flag")),
+            rhs: Box::new(LogExpr::Literal(Value::Bool(true))),
+        };
+        assert_eq!(normalize(&expr), field("flag"));
+    }
+
+    /// x && false → false
+    #[test]
+    fn logical_and_false_annihilator() {
+        let expr = LogExpr::LogicalAnd {
+            lhs: Box::new(field("flag")),
+            rhs: Box::new(LogExpr::Literal(Value::Bool(false))),
+        };
+        assert_eq!(normalize(&expr), LogExpr::Literal(Value::Bool(false)));
+    }
+
+    /// x || false → x
+    #[test]
+    fn logical_or_false_identity() {
+        let expr = LogExpr::LogicalOr {
+            lhs: Box::new(field("flag")),
+            rhs: Box::new(LogExpr::Literal(Value::Bool(false))),
+        };
+        assert_eq!(normalize(&expr), field("flag"));
+    }
+
+    /// x || true → true
+    #[test]
+    fn logical_or_true_annihilator() {
+        let expr = LogExpr::LogicalOr {
+            lhs: Box::new(field("flag")),
+            rhs: Box::new(LogExpr::Literal(Value::Bool(true))),
+        };
+        assert_eq!(normalize(&expr), LogExpr::Literal(Value::Bool(true)));
+    }
+
+    /// f64 zero works too
+    #[test]
+    fn additive_identity_f64() {
+        let expr = LogExpr::Add {
+            lhs: Box::new(field("x")),
+            rhs: Box::new(LogExpr::Literal(Value::F64(0.0))),
+        };
+        assert_eq!(normalize(&expr), field("x"));
     }
 }
