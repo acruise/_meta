@@ -112,6 +112,11 @@ impl Value {
         matches!(self, Value::Null)
     }
 
+    /// Returns `true` if this value is a collection type (Array, Map, Struct).
+    pub fn is_collection(&self) -> bool {
+        matches!(self, Value::Array(_) | Value::Map(_) | Value::Struct(_))
+    }
+
     pub fn is_zero(&self) -> bool {
         match self {
             Value::I8(0) | Value::I16(0) | Value::I32(0) | Value::I64(0)
