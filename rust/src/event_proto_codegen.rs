@@ -17,12 +17,13 @@ pub fn value_kind_to_proto_type(kind: ValueKind) -> ProtoType {
         ValueKind::I8 | ValueKind::I16 | ValueKind::I32 | ValueKind::Date => ProtoType::Sint32,
         ValueKind::I64 | ValueKind::Timestamp | ValueKind::DecimalI64
         | ValueKind::TimestampTz => ProtoType::Sint64,
-        ValueKind::U8 | ValueKind::U16 | ValueKind::U32 | ValueKind::Enum => ProtoType::Uint32,
+        ValueKind::U8 | ValueKind::U16 | ValueKind::U32 | ValueKind::Enum
+        | ValueKind::Ipv4 => ProtoType::Uint32,
         ValueKind::U64 => ProtoType::Uint64,
         ValueKind::F32 => ProtoType::Float,
         ValueKind::F64 => ProtoType::Double,
         ValueKind::String => ProtoType::String,
-        ValueKind::Blob | ValueKind::Clob | ValueKind::Uuid
+        ValueKind::Blob | ValueKind::Clob | ValueKind::Uuid | ValueKind::Ipv6
         | ValueKind::DecimalI128 | ValueKind::Null | ValueKind::Array
         | ValueKind::Map | ValueKind::Struct | ValueKind::EntityRef => ProtoType::Bytes,
     }

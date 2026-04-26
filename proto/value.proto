@@ -54,6 +54,8 @@ message ValueType {
     Float64Type float64 = 12;
     DateType date = 13;
     UuidType uuid = 14;
+    Ipv4Type ipv4 = 17;
+    Ipv6Type ipv6 = 18;
     BlobType blob = 15;
     ClobType clob = 16;
 
@@ -92,6 +94,8 @@ message Float32Type {}
 message Float64Type {}
 message DateType {}
 message UuidType {}
+message Ipv4Type {}
+message Ipv6Type {}
 message BlobType {}
 
 // CLOB, parameterized with encoding. The metamodel notes that for some
