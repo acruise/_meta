@@ -230,60 +230,6 @@ impl ValueType {
     }
 }
 
-impl From<ValueKind> for ValueType {
-    /// Lossless for scalar kinds; compound/parameterized kinds produce a
-    /// default-parameterized type (empty fields, unspecified precision, etc.).
-    fn from(kind: ValueKind) -> Self {
-        match kind {
-            ValueKind::Null => ValueType::Null,
-            ValueKind::Bool => ValueType::Bool,
-            ValueKind::I8 => ValueType::I8,
-            ValueKind::I16 => ValueType::I16,
-            ValueKind::I32 => ValueType::I32,
-            ValueKind::I64 => ValueType::I64,
-            ValueKind::U8 => ValueType::U8,
-            ValueKind::U16 => ValueType::U16,
-            ValueKind::U32 => ValueType::U32,
-            ValueKind::U64 => ValueType::U64,
-            ValueKind::F32 => ValueType::F32,
-            ValueKind::F64 => ValueType::F64,
-            ValueKind::Date => ValueType::Date,
-            ValueKind::Uuid => ValueType::Uuid,
-            ValueKind::Ipv4 => ValueType::Ipv4,
-            ValueKind::Ipv6 => ValueType::Ipv6,
-            ValueKind::Blob => ValueType::Blob,
-            ValueKind::Clob => ValueType::Clob,
-            ValueKind::String => ValueType::String,
-            ValueKind::DecimalI64 => ValueType::Decimal { precision: 18, scale: 0 },
-            ValueKind::DecimalI128 => ValueType::Decimal { precision: 38, scale: 0 },
-            ValueKind::Timestamp => ValueType::Timestamp {
-                precision: TimestampPrecision::Unspecified,
-                timezone: TimestampTimezone::None,
-            },
-            ValueKind::TimestampTz => ValueType::Timestamp {
-                precision: TimestampPrecision::Unspecified,
-                timezone: TimestampTimezone::UtcOffset,
-            },
-            ValueKind::Enum => ValueType::Enum { values: vec![] },
-            ValueKind::Array => ValueType::Array {
-                element_type: Box::new(ValueType::Null),
-                elements_nullable: true,
-            },
-            ValueKind::Map => ValueType::Map {
-                key_type: Box::new(ValueType::String),
-                value_type: Box::new(ValueType::Null),
-                values_nullable: true,
-            },
-            ValueKind::Struct => ValueType::Struct { fields: vec![] },
-            ValueKind::EntityRef => ValueType::EntityRef {
-                target_type_id: String::new(),
-                key_type: Box::new(ValueType::Uuid),
-                revision_pinnable: false,
-            },
-        }
-    }
-}
-
 impl Value {
     pub fn kind(&self) -> ValueKind {
         match self {
@@ -461,6 +407,105 @@ impl From<Vec<Value>> for Value {
 }
 
 // ---------------------------------------------------------------------------
+// IP address parsing and formatting
+// ---------------------------------------------------------------------------
+
+pub fn parse_ipv4(s: &str) -> Option<u32> {
+    s.parse::<std::net::Ipv4Addr>().ok().map(|a| u32::from(a))
+}
+
+pub fn format_ipv4(addr: u32) -> String {
+    std::net::Ipv4Addr::from(addr).to_string()
+}
+
+pub fn parse_ipv6(s: &str) -> Option<u128> {
+    s.parse::<std::net::Ipv6Addr>().ok().map(|a| u128::from(a))
+}
+
+pub fn format_ipv6(addr: u128) -> String {
+    std::net::Ipv6Addr::from(addr).to_string()
+}
+
+/// Parse a CIDR block into (network, mask). Supports full notation
+/// (`192.168.1.0/24`) and shorthand (`10/8`, `192.168/16`) where
+/// omitted trailing octets are treated as zero.
+pub fn parse_cidr_v4(s: &str) -> Option<(u32, u32)> {
+    let (addr_part, prefix_str) = s.split_once('/')?;
+    let prefix_len: u32 = prefix_str.parse().ok()?;
+    if prefix_len > 32 {
+        return None;
+    }
+
+    let octets: Vec<&str> = addr_part.split('.').collect();
+    if octets.is_empty() || octets.len() > 4 {
+        return None;
+    }
+    let mut bytes = [0u8; 4];
+    for (i, octet) in octets.iter().enumerate() {
+        bytes[i] = octet.parse().ok()?;
+    }
+
+    let addr = u32::from_be_bytes(bytes);
+    let mask = if prefix_len == 0 { 0 } else { !0u32 << (32 - prefix_len) };
+    Some((addr & mask, mask))
+}
+
+/// Parse an IPv6 CIDR block into (network, mask).
+pub fn parse_cidr_v6(s: &str) -> Option<(u128, u128)> {
+    let (addr_part, prefix_str) = s.split_once('/')?;
+    let prefix_len: u32 = prefix_str.parse().ok()?;
+    if prefix_len > 128 {
+        return None;
+    }
+
+    let addr = parse_ipv6(addr_part)?;
+    let mask = if prefix_len == 0 { 0 } else { !0u128 << (128 - prefix_len) };
+    Some((addr & mask, mask))
+}
+
+/// Try parsing as v4 CIDR first, then v6. Returns (is_v4, network, mask).
+pub fn parse_cidr(s: &str) -> Option<CidrBlock> {
+    if let Some((network, mask)) = parse_cidr_v4(s) {
+        Some(CidrBlock::V4 { network, mask })
+    } else if let Some((network, mask)) = parse_cidr_v6(s) {
+        Some(CidrBlock::V6 { network, mask })
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CidrBlock {
+    V4 { network: u32, mask: u32 },
+    V6 { network: u128, mask: u128 },
+}
+
+impl CidrBlock {
+    pub fn contains_v4(&self, addr: u32) -> bool {
+        match self {
+            CidrBlock::V4 { network, mask } => (addr & mask) == *network,
+            CidrBlock::V6 { network, mask } => {
+                let mapped = 0xffff_0000_0000u128 | addr as u128;
+                (mapped & mask) == *network
+            }
+        }
+    }
+
+    pub fn contains_v6(&self, addr: u128) -> bool {
+        match self {
+            CidrBlock::V4 { network, mask } => {
+                if addr >> 32 == 0x0000_ffff {
+                    ((addr as u32) & mask) == *network
+                } else {
+                    false
+                }
+            }
+            CidrBlock::V6 { network, mask } => (addr & mask) == *network,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Proto ↔ ValueType conversions
 // ---------------------------------------------------------------------------
 
@@ -631,5 +676,95 @@ mod proto_conv {
             Ok(pb::TimestampTimezone::UtcOffset) => TimestampTimezone::UtcOffset,
             _ => TimestampTimezone::None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ipv4_basic() {
+        assert_eq!(parse_ipv4("192.168.1.1"), Some(0xc0a80101));
+        assert_eq!(parse_ipv4("0.0.0.0"), Some(0));
+        assert_eq!(parse_ipv4("255.255.255.255"), Some(0xffffffff));
+        assert_eq!(parse_ipv4("not an ip"), None);
+    }
+
+    #[test]
+    fn format_ipv4_basic() {
+        assert_eq!(format_ipv4(0xc0a80101), "192.168.1.1");
+        assert_eq!(format_ipv4(0), "0.0.0.0");
+    }
+
+    #[test]
+    fn parse_ipv6_basic() {
+        assert_eq!(parse_ipv6("::1"), Some(1));
+        assert_eq!(parse_ipv6("fe80::1"), Some(0xfe80_0000_0000_0000_0000_0000_0000_0001));
+        assert_eq!(parse_ipv6("nope"), None);
+    }
+
+    #[test]
+    fn cidr_v4_full_notation() {
+        let (net, mask) = parse_cidr_v4("192.168.1.0/24").unwrap();
+        assert_eq!(net, 0xc0a80100);
+        assert_eq!(mask, 0xffffff00);
+    }
+
+    #[test]
+    fn cidr_v4_shorthand() {
+        let (net, mask) = parse_cidr_v4("10/8").unwrap();
+        assert_eq!(net, 0x0a000000);
+        assert_eq!(mask, 0xff000000);
+
+        let (net, mask) = parse_cidr_v4("192.168/16").unwrap();
+        assert_eq!(net, 0xc0a80000);
+        assert_eq!(mask, 0xffff0000);
+
+        let (net, mask) = parse_cidr_v4("172.16.0/12").unwrap();
+        assert_eq!(net, 0xac100000);
+        assert_eq!(mask, 0xfff00000);
+    }
+
+    #[test]
+    fn cidr_v4_host_route() {
+        let (net, mask) = parse_cidr_v4("10.0.0.1/32").unwrap();
+        assert_eq!(mask, 0xffffffff);
+        assert_eq!(net, 0x0a000001);
+    }
+
+    #[test]
+    fn cidr_v4_default_route() {
+        let (net, mask) = parse_cidr_v4("0/0").unwrap();
+        assert_eq!(net, 0);
+        assert_eq!(mask, 0);
+    }
+
+    #[test]
+    fn cidr_v4_invalid() {
+        assert!(parse_cidr_v4("10.0.0.0/33").is_none());
+        assert!(parse_cidr_v4("no-slash").is_none());
+        assert!(parse_cidr_v4("/8").is_none());
+    }
+
+    #[test]
+    fn cidr_v6_basic() {
+        let (net, mask) = parse_cidr_v6("fe80::/10").unwrap();
+        assert_eq!(net, 0xfe80_0000_0000_0000_0000_0000_0000_0000);
+        assert_eq!(mask, 0xffc0_0000_0000_0000_0000_0000_0000_0000);
+    }
+
+    #[test]
+    fn cidr_contains_v4() {
+        let block = parse_cidr("10/8").unwrap();
+        assert!(block.contains_v4(0x0a010203)); // 10.1.2.3
+        assert!(!block.contains_v4(0x0b000000)); // 11.0.0.0
+    }
+
+    #[test]
+    fn cidr_contains_v6() {
+        let block = parse_cidr("fe80::/10").unwrap();
+        assert!(block.contains_v6(0xfe80_0000_0000_0000_0000_0000_0000_0001));
+        assert!(!block.contains_v6(0xff00_0000_0000_0000_0000_0000_0000_0001));
     }
 }

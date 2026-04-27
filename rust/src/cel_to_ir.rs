@@ -283,6 +283,28 @@ fn convert_free_function(
             expect_args(name, 1, args)?;
             Ok(LogExpr::Has { operand: boxed(convert(&args[0], has_udf)?) })
         }
+        "cidr_contains" => {
+            expect_args(name, 2, args)?;
+            Ok(LogExpr::CidrContains {
+                lhs: boxed(convert(&args[0], has_udf)?),
+                rhs: boxed(convert(&args[1], has_udf)?),
+            })
+        }
+        "cidr_match" => {
+            expect_args(name, 2, args)?;
+            Ok(LogExpr::CidrMatch {
+                lhs: boxed(convert(&args[0], has_udf)?),
+                rhs: boxed(convert(&args[1], has_udf)?),
+            })
+        }
+        "ip_to_int" => {
+            expect_args(name, 1, args)?;
+            Ok(LogExpr::IpToInt { operand: boxed(convert(&args[0], has_udf)?) })
+        }
+        "int_to_ip" => {
+            expect_args(name, 1, args)?;
+            Ok(LogExpr::IntToIp { operand: boxed(convert(&args[0], has_udf)?) })
+        }
         _ => Ok(make_udf(full_expr, has_udf)),
     }
 }
@@ -769,6 +791,20 @@ mod tests {
         let t = cel_to_log_expr("age >= 18 && custom_score(payload)").unwrap();
         let c = transitive_coeffects(&t.expr);
         assert_eq!(c, Coeffects::all());
+    }
+
+    #[test]
+    fn cidr_contains_raises_fully() {
+        let t = cel_to_log_expr("cidr_contains(src_ip, '10/8')").unwrap();
+        assert_eq!(t.status, TranslationStatus::FullyRaised);
+        assert!(matches!(t.expr, LogExpr::CidrContains { .. }));
+    }
+
+    #[test]
+    fn ip_to_int_raises_fully() {
+        let t = cel_to_log_expr("ip_to_int(src_ip)").unwrap();
+        assert_eq!(t.status, TranslationStatus::FullyRaised);
+        assert!(matches!(t.expr, LogExpr::IpToInt { .. }));
     }
 
     /// Coeffects propagate through pure operators: `size(name)` reads
