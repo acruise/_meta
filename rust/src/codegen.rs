@@ -387,7 +387,7 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "    match expr {{").unwrap();
     // Recursively union children. We enumerate the structural shapes.
     writeln!(out, "        LogExpr::Literal(_) => {{}},").unwrap();
-    writeln!(out, "        LogExpr::GetFieldByName {{ .. }} | LogExpr::GetFieldByIndex {{ .. }} | LogExpr::GetColumn {{ .. }} | LogExpr::CurrentTimestamp => {{}},").unwrap();
+    writeln!(out, "        LogExpr::GetFieldByName {{ .. }} | LogExpr::GetFieldByIndex {{ .. }} | LogExpr::CurrentTimestamp => {{}},").unwrap();
 
     // Unary: one child named `operand`
     writeln!(out, "        LogExpr::LogicalNot {{ operand }} | LogExpr::Negate {{ operand }}").unwrap();

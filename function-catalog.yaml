@@ -1257,14 +1257,6 @@
   return: T
   properties: { child_index: u32 }
 
-- id: get_column
-  internal: GetColumn
-  status: mapped
-  notes: reference to a materialized buffer column (post-compilation); type from column schema
-  params: []
-  return: T
-  properties: { column_id: string }
-
 # ═══════════════════════════════════════════════════════════════════════
 #  SKIPPED SUBSTRAIT EXTENSIONS
 # ═══════════════════════════════════════════════════════════════════════

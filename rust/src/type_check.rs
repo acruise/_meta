@@ -2,7 +2,7 @@ use crate::expr_gen::LogExpr;
 use crate::value::{Value, ValueKind};
 
 const _: () = assert!(
-    crate::expr_gen::EXPR_GEN_HASH == 0x6ebdb63aea14ca1f,
+    crate::expr_gen::EXPR_GEN_HASH == 0x8cf017d9515d8638,
     "type_check.rs needs review — EXPR_GEN_HASH changed"
 );
 
@@ -78,7 +78,6 @@ impl TypeChecker {
             }
 
             LogExpr::GetFieldByIndex { .. } => Ok((expr.clone(), ValueKind::Null)),
-            LogExpr::GetColumn { .. } => Ok((expr.clone(), ValueKind::Null)),
             LogExpr::GetChildByName { .. } => Ok((expr.clone(), ValueKind::Null)),
             LogExpr::GetChildByIndex { .. } => Ok((expr.clone(), ValueKind::Null)),
             LogExpr::CurrentTimestamp => Ok((expr.clone(), ValueKind::Timestamp)),

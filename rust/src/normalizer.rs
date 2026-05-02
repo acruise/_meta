@@ -21,7 +21,6 @@ pub fn normalize(expr: &LogExpr) -> LogExpr {
         LogExpr::Literal(_)
         | LogExpr::GetFieldByName { .. }
         | LogExpr::GetFieldByIndex { .. }
-        | LogExpr::GetColumn { .. }
         | LogExpr::CurrentTimestamp => expr.clone(),
 
         LogExpr::LogicalNot { operand } => {
@@ -127,7 +126,6 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
         LogExpr::Literal(_)
         | LogExpr::GetFieldByName { .. }
         | LogExpr::GetFieldByIndex { .. }
-        | LogExpr::GetColumn { .. }
         | LogExpr::CurrentTimestamp => expr.clone(),
 
         // Unary
