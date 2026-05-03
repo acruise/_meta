@@ -776,21 +776,21 @@ mod tests {
         use crate::expr_gen::transitive_coeffects;
         let t = cel_to_log_expr("age > 18").unwrap();
         let c = transitive_coeffects(&t.expr);
-        assert!(c.reads_event_data);
-        assert!(!c.reads_enrichment);
-        assert!(c.reads_current_time.is_none());
+        assert!(c.reads_event_data());
+        assert!(!c.reads_enrichment());
+        assert!(!c.reads_current_time());
     }
 
-    /// A CelUdf node conservatively assumes all coeffects — we don't
+    /// A CelUdf node conservatively assumes all coeffects -- we don't
     /// know what the opaque CEL function does, so we assume the worst.
     /// One CelUdf anywhere in the tree poisons the whole expression.
     #[test]
     fn coeffects_udf_is_conservative() {
         use crate::expr_gen::transitive_coeffects;
-        use crate::coeffects::Coeffects;
+        use crate::coeffects::CoeffectSet;
         let t = cel_to_log_expr("age >= 18 && custom_score(payload)").unwrap();
         let c = transitive_coeffects(&t.expr);
-        assert_eq!(c, Coeffects::all());
+        assert_eq!(c, CoeffectSet::all());
     }
 
     #[test]
@@ -815,7 +815,7 @@ mod tests {
         use crate::expr_gen::transitive_coeffects;
         let t = cel_to_log_expr("size(name) + size(email)").unwrap();
         let c = transitive_coeffects(&t.expr);
-        assert!(c.reads_event_data);
-        assert!(c.reads_current_time.is_none());
+        assert!(c.reads_event_data());
+        assert!(!c.reads_current_time());
     }
 }

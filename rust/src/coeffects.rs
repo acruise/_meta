@@ -1,26 +1,130 @@
-/// What external inputs an expression reads. Determines memoization strategy.
+use std::collections::HashSet;
+
+/// What external inputs an expression reads. Determines memoization
+/// strategy and evaluation wave ordering (note 10).
 ///
-/// Coeffects are additive: a compound expression's coeffects are the union
-/// of its children's. The ordering reflects increasing volatility:
+/// Coeffects are additive: a compound expression's coeffects are the
+/// union of its children's. The empty set means pure -- memoize forever.
 ///
-/// 1. **Pure** (no flags) — memoize forever
-/// 2. **reads_event_data** — memoize per event, discard before next
-/// 3. **reads_current_time** — parameterized with interval; result is
-///    stable within the interval, must re-evaluate when it elapses
-/// 4. **reads_aggregates** — inherently stateful; the expression depends
-///    on accumulator state that changes as rows arrive and expire
-/// 5. **reads_enrichment** — possibly IO-heavy on cache miss; the
-///    enrichment cache may need warming before evaluation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Coeffects {
-    pub reads_event_data: bool,
-    pub reads_current_time: Option<TimeGranularity>,
-    pub reads_aggregates: bool,
-    pub reads_enrichment: bool,
+/// Parameterized variants (e.g. `ReadsCurrentTime` with different
+/// granularities) are distinct entries in the set. Coalescing
+/// (e.g. taking the finest granularity) happens after construction.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Coeffect {
+    /// Reads event field data. Memoize per event, discard before next.
+    ReadsEventData,
+    /// Reads the current time at a given granularity. Result is stable
+    /// within the interval; must re-evaluate when it elapses.
+    ReadsCurrentTime(TimeGranularity),
+    /// Reads accumulator state. Inherently stateful -- changes as
+    /// rows arrive and expire.
+    ReadsAggregates,
+    /// Reads enrichment data. Possibly IO-heavy on cache miss;
+    /// the enrichment cache may need warming before evaluation.
+    ReadsEnrichment,
 }
 
-/// How coarse the time dependency is. When unioning, the finer
-/// (smaller) interval wins — the expression is only stable for
+/// A set of coeffects. Wraps a `HashSet<Coeffect>` with convenience
+/// methods for construction and querying.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CoeffectSet(pub HashSet<Coeffect>);
+
+impl CoeffectSet {
+    pub fn new() -> Self {
+        Self(HashSet::new())
+    }
+
+    pub fn pure() -> Self {
+        Self::new()
+    }
+
+    pub fn is_pure(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn insert(&mut self, c: Coeffect) {
+        self.0.insert(c);
+    }
+
+    pub fn contains(&self, c: &Coeffect) -> bool {
+        self.0.contains(c)
+    }
+
+    pub fn reads_event_data(&self) -> bool {
+        self.0.contains(&Coeffect::ReadsEventData)
+    }
+
+    pub fn reads_aggregates(&self) -> bool {
+        self.0.contains(&Coeffect::ReadsAggregates)
+    }
+
+    pub fn reads_enrichment(&self) -> bool {
+        self.0.contains(&Coeffect::ReadsEnrichment)
+    }
+
+    pub fn reads_current_time(&self) -> bool {
+        self.0.iter().any(|c| matches!(c, Coeffect::ReadsCurrentTime(_)))
+    }
+
+    pub fn union(mut self, other: CoeffectSet) -> CoeffectSet {
+        self.0.extend(other.0);
+        self
+    }
+
+    pub fn event_data() -> Self {
+        let mut s = Self::new();
+        s.insert(Coeffect::ReadsEventData);
+        s
+    }
+
+    pub fn current_time(interval_ms: u64) -> Self {
+        let mut s = Self::new();
+        s.insert(Coeffect::ReadsCurrentTime(TimeGranularity::new(interval_ms, 0)));
+        s
+    }
+
+    pub fn current_time_with_offset(interval_ms: u64, offset_ms: u64) -> Self {
+        let mut s = Self::new();
+        s.insert(Coeffect::ReadsCurrentTime(TimeGranularity::new(interval_ms, offset_ms)));
+        s
+    }
+
+    pub fn aggregates() -> Self {
+        let mut s = Self::new();
+        s.insert(Coeffect::ReadsAggregates);
+        s
+    }
+
+    pub fn enrichment() -> Self {
+        let mut s = Self::new();
+        s.insert(Coeffect::ReadsEnrichment);
+        s
+    }
+
+    pub fn all() -> Self {
+        let mut s = Self::new();
+        s.insert(Coeffect::ReadsEventData);
+        s.insert(Coeffect::ReadsCurrentTime(TimeGranularity::new(0, 0)));
+        s.insert(Coeffect::ReadsAggregates);
+        s.insert(Coeffect::ReadsEnrichment);
+        s
+    }
+
+    /// After construction, coalesce all `ReadsCurrentTime` entries to
+    /// the finest (smallest interval) granularity. Call this when you
+    /// need a single canonical granularity for timer scheduling.
+    pub fn finest_time_granularity(&self) -> Option<TimeGranularity> {
+        self.0.iter()
+            .filter_map(|c| match c {
+                Coeffect::ReadsCurrentTime(g) => Some(*g),
+                _ => None,
+            })
+            .reduce(|a, b| a.finer(b))
+    }
+}
+
+/// How coarse the time dependency is. When coalescing, the finer
+/// (smaller) interval wins -- the expression is only stable for
 /// the shortest interval any sub-expression requires.
 ///
 /// The optional `offset_ms` shifts the bucket boundary. An interval
@@ -39,66 +143,5 @@ impl TimeGranularity {
 
     pub fn finer(self, other: Self) -> Self {
         if self.interval_ms <= other.interval_ms { self } else { other }
-    }
-}
-
-impl Default for Coeffects {
-    fn default() -> Self {
-        Self::PURE
-    }
-}
-
-impl Coeffects {
-    pub const PURE: Coeffects = Coeffects {
-        reads_event_data: false,
-        reads_current_time: None,
-        reads_aggregates: false,
-        reads_enrichment: false,
-    };
-
-    pub fn union(self, other: Coeffects) -> Coeffects {
-        Coeffects {
-            reads_event_data: self.reads_event_data || other.reads_event_data,
-            reads_current_time: match (self.reads_current_time, other.reads_current_time) {
-                (None, None) => None,
-                (Some(g), None) | (None, Some(g)) => Some(g),
-                (Some(a), Some(b)) => Some(a.finer(b)),
-            },
-            reads_aggregates: self.reads_aggregates || other.reads_aggregates,
-            reads_enrichment: self.reads_enrichment || other.reads_enrichment,
-        }
-    }
-
-    pub fn is_pure(self) -> bool {
-        self == Self::PURE
-    }
-
-    pub fn all() -> Coeffects {
-        Coeffects {
-            reads_event_data: true,
-            reads_current_time: Some(TimeGranularity::new(0, 0)),
-            reads_aggregates: true,
-            reads_enrichment: true,
-        }
-    }
-
-    pub fn event_data() -> Coeffects {
-        Coeffects { reads_event_data: true, ..Self::PURE }
-    }
-
-    pub fn current_time(interval_ms: u64) -> Coeffects {
-        Coeffects { reads_current_time: Some(TimeGranularity::new(interval_ms, 0)), ..Self::PURE }
-    }
-
-    pub fn current_time_with_offset(interval_ms: u64, offset_ms: u64) -> Coeffects {
-        Coeffects { reads_current_time: Some(TimeGranularity::new(interval_ms, offset_ms)), ..Self::PURE }
-    }
-
-    pub fn aggregates() -> Coeffects {
-        Coeffects { reads_aggregates: true, ..Self::PURE }
-    }
-
-    pub fn enrichment() -> Coeffects {
-        Coeffects { reads_enrichment: true, ..Self::PURE }
     }
 }

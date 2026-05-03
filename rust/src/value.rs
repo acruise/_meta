@@ -36,6 +36,7 @@ pub enum Value {
     Array(Vec<Value>),
     Map(BTreeMap<MapKey, Value>),
     Struct(Vec<Value>),
+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

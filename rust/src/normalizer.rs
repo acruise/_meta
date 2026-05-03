@@ -168,6 +168,7 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
         LogExpr::IpToInt { operand } => LogExpr::IpToInt { operand: n(operand) },
         LogExpr::IntToIp { operand } => LogExpr::IntToIp { operand: n(operand) },
         LogExpr::Has { operand } => LogExpr::Has { operand: n(operand) },
+        LogExpr::RaiseError { operand } => LogExpr::RaiseError { operand: n(operand) },
 
         // Binary (non-commutative handled here; commutative handled in normalize_commutative)
         LogExpr::LessThan { lhs, rhs } => LogExpr::LessThan { lhs: n(lhs), rhs: n(rhs) },
@@ -179,6 +180,7 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
         LogExpr::Modulus { lhs, rhs } => LogExpr::Modulus { lhs: n(lhs), rhs: n(rhs) },
         LogExpr::Power { lhs, rhs } => LogExpr::Power { lhs: n(lhs), rhs: n(rhs) },
         LogExpr::Coalesce { lhs, rhs } => LogExpr::Coalesce { lhs: n(lhs), rhs: n(rhs) },
+        LogExpr::TryOrElse { lhs, rhs } => LogExpr::TryOrElse { lhs: n(lhs), rhs: n(rhs) },
         LogExpr::Least { lhs, rhs } => LogExpr::Least { lhs: n(lhs), rhs: n(rhs) },
         LogExpr::Greatest { lhs, rhs } => LogExpr::Greatest { lhs: n(lhs), rhs: n(rhs) },
         LogExpr::StringSplit { lhs, rhs } => LogExpr::StringSplit { lhs: n(lhs), rhs: n(rhs) },

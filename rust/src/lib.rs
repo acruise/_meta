@@ -1,5 +1,6 @@
 pub mod value;
 pub mod coeffects;
+pub mod effects;
 pub mod codegen;
 pub mod type_check;
 pub mod cel_to_ir;

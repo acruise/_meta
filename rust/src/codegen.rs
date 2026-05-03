@@ -324,12 +324,12 @@ fn emit_intrinsic_coeffects(
 ) {
     gen_warning(out);
     writeln!(out, "impl LogExpr {{").unwrap();
-    writeln!(out, "    pub fn intrinsic_coeffects(&self) -> crate::coeffects::Coeffects {{").unwrap();
-    writeln!(out, "        use crate::coeffects::Coeffects;").unwrap();
+    writeln!(out, "    pub fn intrinsic_coeffects(&self) -> crate::coeffects::CoeffectSet {{").unwrap();
+    writeln!(out, "        use crate::coeffects::CoeffectSet;").unwrap();
     writeln!(out, "        match self {{").unwrap();
 
-    writeln!(out, "            Self::GetFieldByName {{ .. }} | Self::GetFieldByIndex {{ .. }} => Coeffects::event_data(),").unwrap();
-    writeln!(out, "            Self::CelUdf {{ .. }} => Coeffects::all(),").unwrap();
+    writeln!(out, "            Self::GetFieldByName {{ .. }} | Self::GetFieldByIndex {{ .. }} => CoeffectSet::event_data(),").unwrap();
+    writeln!(out, "            Self::CelUdf {{ .. }} => CoeffectSet::all(),").unwrap();
 
     for e in scalars.iter().chain(notochord_ops.iter()).chain(hofs.iter()) {
         if e.coeffects.is_empty() {
@@ -339,16 +339,16 @@ fn emit_intrinsic_coeffects(
         // Build a chain of union() calls from the declared coeffects
         let mut parts: Vec<String> = Vec::new();
         if e.coeffects.contains(&"reads_event_data".to_string()) {
-            parts.push("Coeffects::event_data()".to_string());
+            parts.push("CoeffectSet::event_data()".to_string());
         }
         if e.coeffects.contains(&"reads_current_time".to_string()) {
-            parts.push("Coeffects::current_time(0)".to_string());
+            parts.push("CoeffectSet::current_time(0)".to_string());
         }
         if e.coeffects.contains(&"reads_aggregates".to_string()) {
-            parts.push("Coeffects::aggregates()".to_string());
+            parts.push("CoeffectSet::aggregates()".to_string());
         }
         if e.coeffects.contains(&"reads_enrichment".to_string()) {
-            parts.push("Coeffects::enrichment()".to_string());
+            parts.push("CoeffectSet::enrichment()".to_string());
         }
         if parts.is_empty() {
             continue;
@@ -357,7 +357,7 @@ fn emit_intrinsic_coeffects(
         writeln!(out, "            Self::{name} {{ .. }} => {expr},").unwrap();
     }
 
-    writeln!(out, "            _ => Coeffects::default(),").unwrap();
+    writeln!(out, "            _ => CoeffectSet::default(),").unwrap();
     writeln!(out, "        }}").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
@@ -382,7 +382,7 @@ fn emit_intrinsic_coeffects(
 
 fn emit_transitive_coeffects(out: &mut String) {
     gen_warning(out);
-    writeln!(out, "pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::Coeffects {{").unwrap();
+    writeln!(out, "pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {{").unwrap();
     writeln!(out, "    let mut result = expr.intrinsic_coeffects();").unwrap();
     writeln!(out, "    match expr {{").unwrap();
     // Recursively union children. We enumerate the structural shapes.
@@ -405,6 +405,7 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "        | LogExpr::JsonParse {{ operand }} | LogExpr::JsonParseStruct {{ operand }} | LogExpr::JsonStringify {{ operand }}").unwrap();
     writeln!(out, "        | LogExpr::IpToInt {{ operand }} | LogExpr::IntToIp {{ operand }}").unwrap();
     writeln!(out, "        | LogExpr::Has {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::RaiseError {{ operand }}").unwrap();
     writeln!(out, "        => {{ result = result.union(transitive_coeffects(operand)); }},").unwrap();
 
     // Binary: lhs/rhs
@@ -413,7 +414,7 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "        | LogExpr::LessThan {{ lhs, rhs }} | LogExpr::LessOrEqual {{ lhs, rhs }}").unwrap();
     writeln!(out, "        | LogExpr::GreaterThan {{ lhs, rhs }} | LogExpr::GreaterOrEqual {{ lhs, rhs }}").unwrap();
     writeln!(out, "        | LogExpr::NullSafeEqual {{ lhs, rhs }} | LogExpr::NullSafeNotEqual {{ lhs, rhs }}").unwrap();
-    writeln!(out, "        | LogExpr::Coalesce {{ lhs, rhs }} | LogExpr::Least {{ lhs, rhs }} | LogExpr::Greatest {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::Coalesce {{ lhs, rhs }} | LogExpr::TryOrElse {{ lhs, rhs }} | LogExpr::Least {{ lhs, rhs }} | LogExpr::Greatest {{ lhs, rhs }}").unwrap();
     writeln!(out, "        | LogExpr::Add {{ lhs, rhs }} | LogExpr::Subtract {{ lhs, rhs }}").unwrap();
     writeln!(out, "        | LogExpr::Multiply {{ lhs, rhs }} | LogExpr::Divide {{ lhs, rhs }} | LogExpr::Modulus {{ lhs, rhs }}").unwrap();
     writeln!(out, "        | LogExpr::Power {{ lhs, rhs }}").unwrap();

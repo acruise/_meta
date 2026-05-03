@@ -2,7 +2,7 @@ use crate::expr_gen::LogExpr;
 use crate::value::{Value, ValueKind};
 
 const _: () = assert!(
-    crate::expr_gen::EXPR_GEN_HASH == 0x8cf017d9515d8638,
+    crate::expr_gen::EXPR_GEN_HASH == 0x75c36047581e0f83,
     "type_check.rs needs review — EXPR_GEN_HASH changed"
 );
 
@@ -234,6 +234,18 @@ impl TypeChecker {
                 let (rhs, rhs_kind) = self.check(rhs)?;
                 let (lhs, rhs, kind) = self.unify_pair(lhs, lhs_kind, rhs, rhs_kind, "coalesce")?;
                 Ok((LogExpr::Coalesce { lhs: Box::new(lhs), rhs: Box::new(rhs) }, kind))
+            }
+
+            LogExpr::TryOrElse { lhs, rhs } => {
+                let (lhs, lhs_kind) = self.check(lhs)?;
+                let (rhs, rhs_kind) = self.check(rhs)?;
+                let (lhs, rhs, kind) = self.unify_pair(lhs, lhs_kind, rhs, rhs_kind, "try_or_else")?;
+                Ok((LogExpr::TryOrElse { lhs: Box::new(lhs), rhs: Box::new(rhs) }, kind))
+            }
+
+            LogExpr::RaiseError { operand } => {
+                let (operand, _) = self.expect_type(operand, ValueKind::String, "raise_error")?;
+                Ok((LogExpr::RaiseError { operand: Box::new(operand) }, ValueKind::Null))
             }
 
             LogExpr::CelUdf { source, args } => {

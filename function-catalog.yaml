@@ -224,10 +224,25 @@
 - id: coalesce
   internal: Coalesce
   substrait: { ext: functions_comparison, name: coalesce }
-  status: todo
+  status: mapped
   null_semantics: consume
-  notes: returns first non-null argument
-  params: ["T?", "T?"]
+  notes: returns first non-null argument. Consumes may_null effect from first operand.
+  params: ["T?", "T"]
+  return: T
+
+- id: try_or_else
+  internal: TryOrElse
+  status: mapped
+  null_semantics: consume
+  notes: evaluates first operand; if it errors, returns second operand. Consumes may_error effect from first operand. Result may still be nullable (from either branch).
+  params: ["T??", "T?"]
+  return: "T?"
+
+- id: raise_error
+  internal: RaiseError
+  status: mapped
+  notes: always evaluates to Err. Return type is bottom (unifies with any T from context). The operand is a string message. Effect is always may_error. Used for explicit user-authored error signaling in CEL scripts. Caught by TryOrElse.
+  params: [string]
   return: T
 
 - id: least
