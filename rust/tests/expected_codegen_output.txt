@@ -57,8 +57,12 @@ pub enum LogExpr {
     IsFinite { operand: Box<LogExpr> },
     /// NaN is neither finite nor infinite; IsInfinite != LogicalNot(IsFinite)
     IsInfinite { operand: Box<LogExpr> },
-    /// returns first non-null argument
+    /// returns first non-null argument. Consumes may_null effect from first operand.
     Coalesce { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// evaluates first operand; if it errors, returns second operand. Consumes may_error effect from first operand. Result may still be nullable (from either branch).
+    TryOrElse { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// always evaluates to Err. Return type is bottom (unifies with any T from context). The operand is a string message. Effect is always may_error. Used for explicit user-authored error signaling in CEL scripts. Caught by TryOrElse.
+    RaiseError { operand: Box<LogExpr> },
     Least { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
     Greatest { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
     /// also string/bytes/list concat and timestamp+duration in CEL
@@ -94,7 +98,6 @@ pub enum LogExpr {
     /// useful for time bucketing in predicates
     RoundTemporal { operand: Box<LogExpr> },
     RoundCalendar { operand: Box<LogExpr> },
-    /// maps to coeffect reads_current_time in our model
     CurrentTimestamp,
     CastBool { operand: Box<LogExpr> },
     CastInt { operand: Box<LogExpr> },
@@ -139,7 +142,6 @@ pub enum LogExpr {
     GetFieldByIndex { field_index: u32 },
     GetChildByName { child_name: String, operand: Box<LogExpr> },
     GetChildByIndex { child_index: u32, lhs: Box<LogExpr>, rhs: Box<LogExpr> },
-    GetColumn { column_id: String },
 
     Has { operand: Box<LogExpr> },
     All { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
@@ -148,6 +150,146 @@ pub enum LogExpr {
     Filter { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
     MapTransform { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
 
+    /// Opaque CEL sub-expression that could not be raised to a native IR node.
+    /// The `source` field is the reconstructed CEL text, kept for informational/
+    /// debugging purposes ONLY — it must NEVER be re-parsed for execution.
+    /// The authoritative representation is the compiled program in the side table.
+    CelUdf { source: String, args: Vec<Box<LogExpr>> },
+
+    /// Dispatch to a registered native UDF by function_id.
+    NativeCall { function_id: String, args: Vec<Box<LogExpr>> },
+
     /// Multi-way conditional (desugared CASE).
     Case { arms: Vec<(Box<LogExpr>, Box<LogExpr>)>, default: Box<LogExpr> },
 }
+
+/// Generated — do not modify. See top of file.
+impl LogExpr {
+    pub fn intrinsic_coeffects(&self) -> crate::coeffects::CoeffectSet {
+        use crate::coeffects::CoeffectSet;
+        match self {
+            Self::GetFieldByName { .. } | Self::GetFieldByIndex { .. } => CoeffectSet::event_data(),
+            Self::CelUdf { .. } => CoeffectSet::all(),
+            Self::NativeCall { .. } => {
+                let mut s = CoeffectSet::new();
+                s.insert(crate::coeffects::Coeffect::CallsNativeUdf);
+                s
+            },
+            Self::CurrentTimestamp { .. } => CoeffectSet::current_time(0),
+            _ => CoeffectSet::default(),
+        }
+    }
+
+    pub fn is_commutative(&self) -> bool {
+        matches!(self,
+            Self::LogicalOr { .. } |
+            Self::LogicalAnd { .. } |
+            Self::Equal { .. } |
+            Self::NotEqual { .. } |
+            Self::NullSafeEqual { .. } |
+            Self::NullSafeNotEqual { .. } |
+            Self::Add { .. } |
+            Self::Multiply { .. }
+        )
+    }
+}
+
+/// Generated — do not modify. See top of file.
+pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
+    let mut result = expr.intrinsic_coeffects();
+    match expr {
+        LogExpr::Literal(_) => {},
+        LogExpr::GetFieldByName { .. } | LogExpr::GetFieldByIndex { .. } | LogExpr::CurrentTimestamp => {},
+        LogExpr::LogicalNot { operand } | LogExpr::Negate { operand }
+        | LogExpr::IsNull { operand } | LogExpr::IsNotNull { operand }
+        | LogExpr::IsNan { operand } | LogExpr::IsFinite { operand } | LogExpr::IsInfinite { operand }
+        | LogExpr::Abs { operand } | LogExpr::Sqrt { operand } | LogExpr::Exp { operand } | LogExpr::Sign { operand }
+        | LogExpr::Size { operand } | LogExpr::Lower { operand } | LogExpr::Upper { operand } | LogExpr::Trim { operand }
+        | LogExpr::TimestampExtract { operand } | LogExpr::RoundTemporal { operand } | LogExpr::RoundCalendar { operand }
+        | LogExpr::CastBool { operand } | LogExpr::CastInt { operand } | LogExpr::CastUint { operand }
+        | LogExpr::CastDouble { operand } | LogExpr::CastString { operand } | LogExpr::CastBytes { operand }
+        | LogExpr::CastDuration { operand } | LogExpr::CastTimestamp { operand }
+        | LogExpr::TypeOf { operand } | LogExpr::Dyn { operand }
+        | LogExpr::Ln { operand } | LogExpr::Log10 { operand }
+        | LogExpr::Ceil { operand } | LogExpr::Floor { operand } | LogExpr::Round { operand }
+        | LogExpr::JsonParse { operand } | LogExpr::JsonParseStruct { operand } | LogExpr::JsonStringify { operand }
+        | LogExpr::IpToInt { operand } | LogExpr::IntToIp { operand }
+        | LogExpr::Has { operand }
+        | LogExpr::RaiseError { operand }
+        => { result = result.union(transitive_coeffects(operand)); },
+        LogExpr::LogicalOr { lhs, rhs } | LogExpr::LogicalAnd { lhs, rhs }
+        | LogExpr::Equal { lhs, rhs } | LogExpr::NotEqual { lhs, rhs }
+        | LogExpr::LessThan { lhs, rhs } | LogExpr::LessOrEqual { lhs, rhs }
+        | LogExpr::GreaterThan { lhs, rhs } | LogExpr::GreaterOrEqual { lhs, rhs }
+        | LogExpr::NullSafeEqual { lhs, rhs } | LogExpr::NullSafeNotEqual { lhs, rhs }
+        | LogExpr::Coalesce { lhs, rhs } | LogExpr::TryOrElse { lhs, rhs } | LogExpr::Least { lhs, rhs } | LogExpr::Greatest { lhs, rhs }
+        | LogExpr::Add { lhs, rhs } | LogExpr::Subtract { lhs, rhs }
+        | LogExpr::Multiply { lhs, rhs } | LogExpr::Divide { lhs, rhs } | LogExpr::Modulus { lhs, rhs }
+        | LogExpr::Power { lhs, rhs }
+        | LogExpr::StringSplit { lhs, rhs } | LogExpr::StringPosition { lhs, rhs } | LogExpr::Concat { lhs, rhs }
+        | LogExpr::Index { lhs, rhs } | LogExpr::In { lhs, rhs }
+        | LogExpr::JsonExtract { lhs, rhs } | LogExpr::JsonExtractString { lhs, rhs }
+        | LogExpr::CidrContains { lhs, rhs } | LogExpr::CidrMatch { lhs, rhs }
+        => {
+            result = result.union(transitive_coeffects(lhs));
+            result = result.union(transitive_coeffects(rhs));
+        },
+        LogExpr::Contains { receiver, arg } | LogExpr::StartsWith { receiver, arg }
+        | LogExpr::EndsWith { receiver, arg } | LogExpr::RegexMatch { receiver, arg }
+        => {
+            result = result.union(transitive_coeffects(receiver));
+            result = result.union(transitive_coeffects(arg));
+        },
+        LogExpr::Between { arg0, arg1, arg2 } | LogExpr::Substring { arg0, arg1, arg2 }
+        | LogExpr::Replace { arg0, arg1, arg2 }
+        => {
+            result = result.union(transitive_coeffects(arg0));
+            result = result.union(transitive_coeffects(arg1));
+            result = result.union(transitive_coeffects(arg2));
+        },
+        LogExpr::Conditional { condition, then_expr, else_expr } => {
+            result = result.union(transitive_coeffects(condition));
+            result = result.union(transitive_coeffects(then_expr));
+            result = result.union(transitive_coeffects(else_expr));
+        },
+        LogExpr::GetChildByName { operand, .. } => {
+            result = result.union(transitive_coeffects(operand));
+        },
+        LogExpr::GetChildByIndex { lhs, rhs, .. } => {
+            result = result.union(transitive_coeffects(lhs));
+            result = result.union(transitive_coeffects(rhs));
+        },
+        LogExpr::All { collection, body, .. } | LogExpr::Exists { collection, body, .. }
+        | LogExpr::ExistsOne { collection, body, .. } | LogExpr::Filter { collection, body, .. }
+        | LogExpr::MapTransform { collection, body, .. }
+        => {
+            result = result.union(transitive_coeffects(collection));
+            result = result.union(transitive_coeffects(body));
+        },
+        LogExpr::CelUdf { args, .. } | LogExpr::NativeCall { args, .. } => {
+            for arg in args {
+                result = result.union(transitive_coeffects(arg));
+            }
+        },
+        LogExpr::Case { arms, default } => {
+            for (cond, body) in arms {
+                result = result.union(transitive_coeffects(cond));
+                result = result.union(transitive_coeffects(body));
+            }
+            result = result.union(transitive_coeffects(default));
+        },
+    }
+    result
+}
+
+/// Generated — do not modify. See top of file.
+impl LogExpr {
+    /// True if this expression tree can be evaluated at compile time --
+    /// no event data, no session state, no aggregates, no enrichment.
+    /// Useful for predicate pushdown: e.g. `IN (x, y, z)` can only be
+    /// rewritten to a hash lookup if all elements are foldable.
+    pub fn is_foldable(&self) -> bool {
+        transitive_coeffects(self).is_pure()
+    }
+}
+

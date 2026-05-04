@@ -22,6 +22,13 @@ pub enum Coeffect {
     /// Reads enrichment data. Possibly IO-heavy on cache miss;
     /// the enrichment cache may need warming before evaluation.
     ReadsEnrichment,
+    /// Calls a native UDF -- arbitrary Rust code behind a proto
+    /// boundary. This is the first place Turing-complete user code
+    /// enters the expression system. The UDF may be pure in practice,
+    /// but we cannot verify that, so this coeffect prevents
+    /// is_foldable() from treating NativeCall subtrees as constants
+    /// and blocks any optimization that assumes determinism.
+    CallsNativeUdf,
 }
 
 /// A set of coeffects. Wraps a `HashSet<Coeffect>` with convenience

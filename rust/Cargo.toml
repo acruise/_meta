@@ -5,6 +5,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+meta-types = { path = "../rust-types" }
 prost = "0.13"
 prost-types = "0.13"
 serde = { version = "1", features = ["derive"] }

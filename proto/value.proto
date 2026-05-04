@@ -37,6 +37,15 @@ package cluonflux.meta;
 
 // A value type. The top-level oneof partitions into scalar, parameterized
 // scalar, and compound variants.
+//
+// NOTE: There is deliberately no flat "ValueKind" enum alongside this
+// message. Earlier designs carried a tag-only discriminant for fast
+// switching, but it was a second way to spell the same information and
+// created mouseholes where tagged values leaked past type-tree
+// boundaries. The recursive ValueType tree is the single source of
+// truth for type identity everywhere: schema declarations, type
+// checking, serde boundaries, and codegen. If you need a discriminant,
+// match on the oneof -- do not introduce a parallel enum.
 message ValueType {
   oneof kind {
     // --- Scalar types (singletons; no parameters) ---
@@ -229,6 +238,54 @@ message EntityRefType {
   // EntityRef values carry an optional revision; if false, the reference
   // always "floats" to the latest revision of the target.
   bool revision_pinnable = 3;
+}
+
+// --- Encoded values ---
+// A serialized Value whose interpretation requires a companion ValueType.
+// The ValueType tells the decoder which variant to expect and how to
+// interpret ambiguous wire types (e.g. int64 could be I8..I64, a
+// timestamp, or a date). Null is represented by the oneof being unset.
+
+message EncodedValue {
+  oneof kind {
+    bool bool_value = 1;
+    int64 int_value = 2;      // I8, I16, I32, I64, Date (days since epoch)
+    uint64 uint_value = 3;    // U8, U16, U32, U64, Enum (ordinal)
+    double float_value = 4;   // F32 (narrowed on decode), F64
+    string string_value = 5;
+    bytes bytes_value = 6;    // Blob, Clob, Uuid (16 bytes), Ipv4 (4 bytes), Ipv6 (16 bytes)
+    int64 timestamp_value = 7;           // Timestamp (no tz)
+    TimestampTzValue timestamp_tz_value = 8;
+    int64 decimal_i64_value = 9;         // Decimal with precision <= 18
+    bytes decimal_i128_value = 10;       // Decimal with precision > 18 (16 bytes LE)
+    EncodedStructValue struct_value = 20;
+    EncodedArrayValue array_value = 21;
+    EncodedMapValue map_value = 22;
+  }
+}
+
+message TimestampTzValue {
+  int64 epoch = 1;
+  int32 offset_minutes = 2;
+}
+
+message EncodedStructValue {
+  // One entry per struct field, in schema order.
+  // Null fields are present as EncodedValue with oneof unset.
+  repeated EncodedValue fields = 1;
+}
+
+message EncodedArrayValue {
+  repeated EncodedValue elements = 1;
+}
+
+message EncodedMapValue {
+  repeated EncodedMapEntry entries = 1;
+}
+
+message EncodedMapEntry {
+  EncodedValue key = 1;
+  EncodedValue value = 2;
 }
 
 // --- User-defined type references ---

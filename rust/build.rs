@@ -8,15 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_root = PathBuf::from("../proto");
     let vendor_root = proto_root.join("vendor");
 
-    // --- Protobuf ---
-
-    let mut config = prost_build::Config::new();
-    config.disable_comments(&["."]);
-
-    config.compile_protos(
-        &[proto_root.join("value.proto")],
-        &[&proto_root],
-    )?;
+    // --- CEL protobuf (syntax.proto, checked.proto) ---
 
     let mut config = prost_build::Config::new();
     config.disable_comments(&["."]);

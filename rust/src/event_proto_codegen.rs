@@ -4,28 +4,25 @@
 //! boundary (webhook / Kafka consumer) and is not performance-critical.
 
 use crate::type_check::ExprSchema;
-use crate::value::ValueKind;
+use crate::value::ValueType;
 
 use prost_types::field_descriptor_proto::Type as ProtoType;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 
-/// Map a ValueKind to the protobuf field descriptor type.
-pub fn value_kind_to_proto_type(kind: ValueKind) -> ProtoType {
-    match kind {
-        ValueKind::Bool => ProtoType::Bool,
-        ValueKind::I8 | ValueKind::I16 | ValueKind::I32 | ValueKind::Date => ProtoType::Sint32,
-        ValueKind::I64 | ValueKind::Timestamp | ValueKind::DecimalI64
-        | ValueKind::TimestampTz => ProtoType::Sint64,
-        ValueKind::U8 | ValueKind::U16 | ValueKind::U32 | ValueKind::Enum
-        | ValueKind::Ipv4 => ProtoType::Uint32,
-        ValueKind::U64 => ProtoType::Uint64,
-        ValueKind::F32 => ProtoType::Float,
-        ValueKind::F64 => ProtoType::Double,
-        ValueKind::String => ProtoType::String,
-        ValueKind::Blob | ValueKind::Clob | ValueKind::Uuid | ValueKind::Ipv6
-        | ValueKind::DecimalI128 | ValueKind::Null | ValueKind::Array
-        | ValueKind::Map | ValueKind::Struct | ValueKind::EntityRef => ProtoType::Bytes,
+pub fn value_type_to_proto_type(vt: &ValueType) -> ProtoType {
+    match vt {
+        ValueType::Bool => ProtoType::Bool,
+        ValueType::I8 | ValueType::I16 | ValueType::I32 | ValueType::Date => ProtoType::Sint32,
+        ValueType::I64 | ValueType::Timestamp { .. } => ProtoType::Sint64,
+        ValueType::Decimal { precision, .. } if *precision <= 18 => ProtoType::Sint64,
+        ValueType::U8 | ValueType::U16 | ValueType::U32 | ValueType::Enum { .. }
+        | ValueType::Ipv4 => ProtoType::Uint32,
+        ValueType::U64 => ProtoType::Uint64,
+        ValueType::F32 => ProtoType::Float,
+        ValueType::F64 => ProtoType::Double,
+        ValueType::String => ProtoType::String,
+        _ => ProtoType::Bytes,
     }
 }
 
@@ -63,7 +60,7 @@ pub fn generate_event_proto(
     out.push_str(&format!("message {message_name} {{\n"));
 
     for (i, field) in schema.event_fields.iter().enumerate() {
-        let proto_type = proto_type_keyword(value_kind_to_proto_type(field.kind));
+        let proto_type = proto_type_keyword(value_type_to_proto_type(&field.value_type));
         let tag = i + 1;
         out.push_str(&format!("  {proto_type} {} = {tag};\n", field.name));
     }
@@ -87,7 +84,7 @@ pub fn generate_stripped_event_proto(
 
     for (i, field) in schema.event_fields.iter().enumerate() {
         if keep_fields.contains(&field.name.as_str()) {
-            let proto_type = proto_type_keyword(value_kind_to_proto_type(field.kind));
+            let proto_type = proto_type_keyword(value_type_to_proto_type(&field.value_type));
             let tag = i + 1;
             out.push_str(&format!("  {proto_type} {} = {tag};\n", field.name));
         }
@@ -97,31 +94,31 @@ pub fn generate_stripped_event_proto(
     out
 }
 
-fn value_kind_to_json_extract(kind: ValueKind, field_name: &str) -> TokenStream {
+fn value_type_to_json_extract(vt: &ValueType, field_name: &str) -> TokenStream {
     let name = field_name;
-    match kind {
-        ValueKind::Bool => quote! {
+    match vt {
+        ValueType::Bool => quote! {
             obj.get(#name).and_then(|v| v.as_bool()).unwrap_or_default()
         },
-        ValueKind::I8 | ValueKind::I16 | ValueKind::I32 | ValueKind::Date => quote! {
+        ValueType::I8 | ValueType::I16 | ValueType::I32 | ValueType::Date => quote! {
             obj.get(#name).and_then(|v| v.as_i64()).unwrap_or_default() as i32
         },
-        ValueKind::I64 | ValueKind::Timestamp | ValueKind::DecimalI64 | ValueKind::TimestampTz => quote! {
+        ValueType::I64 | ValueType::Timestamp { .. } | ValueType::Decimal { .. } => quote! {
             obj.get(#name).and_then(|v| v.as_i64()).unwrap_or_default()
         },
-        ValueKind::U8 | ValueKind::U16 | ValueKind::U32 | ValueKind::Enum => quote! {
+        ValueType::U8 | ValueType::U16 | ValueType::U32 | ValueType::Enum { .. } => quote! {
             obj.get(#name).and_then(|v| v.as_u64()).unwrap_or_default() as u32
         },
-        ValueKind::U64 => quote! {
+        ValueType::U64 => quote! {
             obj.get(#name).and_then(|v| v.as_u64()).unwrap_or_default()
         },
-        ValueKind::F32 => quote! {
+        ValueType::F32 => quote! {
             obj.get(#name).and_then(|v| v.as_f64()).unwrap_or_default() as f32
         },
-        ValueKind::F64 => quote! {
+        ValueType::F64 => quote! {
             obj.get(#name).and_then(|v| v.as_f64()).unwrap_or_default()
         },
-        ValueKind::String => quote! {
+        ValueType::String => quote! {
             obj.get(#name).and_then(|v| v.as_str()).unwrap_or_default().to_string()
         },
         _ => quote! {
@@ -144,7 +141,7 @@ pub fn generate_json_to_proto_fn(
 
     let field_assignments: Vec<TokenStream> = schema.event_fields.iter().map(|field| {
         let field_ident = Ident::new(&field.name, Span::call_site());
-        let extract = value_kind_to_json_extract(field.kind, &field.name);
+        let extract = value_type_to_json_extract(&field.value_type, &field.name);
         quote! { #field_ident: #extract }
     }).collect();
 
@@ -184,12 +181,13 @@ mod tests {
     fn order_schema() -> ExprSchema {
         ExprSchema {
             event_fields: vec![
-                FieldSchema { name: "ts".into(), kind: ValueKind::I64, nullable: false },
-                FieldSchema { name: "price".into(), kind: ValueKind::I64, nullable: false },
-                FieldSchema { name: "qty".into(), kind: ValueKind::I64, nullable: false },
-                FieldSchema { name: "status".into(), kind: ValueKind::String, nullable: false },
+                FieldSchema { name: "ts".into(), value_type: ValueType::I64, nullable: false },
+                FieldSchema { name: "price".into(), value_type: ValueType::I64, nullable: false },
+                FieldSchema { name: "qty".into(), value_type: ValueType::I64, nullable: false },
+                FieldSchema { name: "status".into(), value_type: ValueType::String, nullable: false },
             ],
             enrichment_fields: vec![],
+            native_udfs: vec![],
         }
     }
 
@@ -232,12 +230,13 @@ mod tests {
     fn mixed_types() {
         let schema = ExprSchema {
             event_fields: vec![
-                FieldSchema { name: "active".into(), kind: ValueKind::Bool, nullable: false },
-                FieldSchema { name: "score".into(), kind: ValueKind::F64, nullable: false },
-                FieldSchema { name: "count".into(), kind: ValueKind::U32, nullable: false },
-                FieldSchema { name: "name".into(), kind: ValueKind::String, nullable: false },
+                FieldSchema { name: "active".into(), value_type: ValueType::Bool, nullable: false },
+                FieldSchema { name: "score".into(), value_type: ValueType::F64, nullable: false },
+                FieldSchema { name: "count".into(), value_type: ValueType::U32, nullable: false },
+                FieldSchema { name: "name".into(), value_type: ValueType::String, nullable: false },
             ],
             enrichment_fields: vec![],
+            native_udfs: vec![],
         };
         let proto = generate_event_proto(&schema, "MixedEvent", "test.v1");
         assert!(proto.contains("bool active = 1;"));

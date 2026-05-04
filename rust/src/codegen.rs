@@ -307,6 +307,9 @@ fn emit_logical_ir(
     writeln!(out, "    /// The authoritative representation is the compiled program in the side table.").unwrap();
     writeln!(out, "    CelUdf {{ source: String, args: Vec<Box<LogExpr>> }},").unwrap();
     writeln!(out).unwrap();
+    writeln!(out, "    /// Dispatch to a registered native UDF by function_id.").unwrap();
+    writeln!(out, "    NativeCall {{ function_id: String, args: Vec<Box<LogExpr>> }},").unwrap();
+    writeln!(out).unwrap();
     writeln!(out, "    /// Multi-way conditional (desugared CASE).").unwrap();
     writeln!(out, "    Case {{ arms: Vec<(Box<LogExpr>, Box<LogExpr>)>, default: Box<LogExpr> }},").unwrap();
     writeln!(out, "}}").unwrap();
@@ -330,6 +333,11 @@ fn emit_intrinsic_coeffects(
 
     writeln!(out, "            Self::GetFieldByName {{ .. }} | Self::GetFieldByIndex {{ .. }} => CoeffectSet::event_data(),").unwrap();
     writeln!(out, "            Self::CelUdf {{ .. }} => CoeffectSet::all(),").unwrap();
+    writeln!(out, "            Self::NativeCall {{ .. }} => {{").unwrap();
+    writeln!(out, "                let mut s = CoeffectSet::new();").unwrap();
+    writeln!(out, "                s.insert(crate::coeffects::Coeffect::CallsNativeUdf);").unwrap();
+    writeln!(out, "                s").unwrap();
+    writeln!(out, "            }},").unwrap();
 
     for e in scalars.iter().chain(notochord_ops.iter()).chain(hofs.iter()) {
         if e.coeffects.is_empty() {
@@ -468,8 +476,8 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "            result = result.union(transitive_coeffects(body));").unwrap();
     writeln!(out, "        }},").unwrap();
 
-    // CelUdf: args
-    writeln!(out, "        LogExpr::CelUdf {{ args, .. }} => {{").unwrap();
+    // CelUdf / NativeCall: args
+    writeln!(out, "        LogExpr::CelUdf {{ args, .. }} | LogExpr::NativeCall {{ args, .. }} => {{").unwrap();
     writeln!(out, "            for arg in args {{").unwrap();
     writeln!(out, "                result = result.union(transitive_coeffects(arg));").unwrap();
     writeln!(out, "            }}").unwrap();
@@ -486,6 +494,22 @@ fn emit_transitive_coeffects(out: &mut String) {
 
     writeln!(out, "    }}").unwrap();
     writeln!(out, "    result").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    emit_is_foldable(out);
+}
+
+fn emit_is_foldable(out: &mut String) {
+    gen_warning(out);
+    writeln!(out, "impl LogExpr {{").unwrap();
+    writeln!(out, "    /// True if this expression tree can be evaluated at compile time --").unwrap();
+    writeln!(out, "    /// no event data, no session state, no aggregates, no enrichment.").unwrap();
+    writeln!(out, "    /// Useful for predicate pushdown: e.g. `IN (x, y, z)` can only be").unwrap();
+    writeln!(out, "    /// rewritten to a hash lookup if all elements are foldable.").unwrap();
+    writeln!(out, "    pub fn is_foldable(&self) -> bool {{").unwrap();
+    writeln!(out, "        transitive_coeffects(self).is_pure()").unwrap();
+    writeln!(out, "    }}").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 }

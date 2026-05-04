@@ -1,6 +1,28 @@
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
+/// Tagged union of every value the system can represent.
+///
+/// This type exists in tension with a core design principle: the buffer
+/// and codegen paths work with typed, unboxed columnar data -- not
+/// tagged enums. A `Column<I64Col>` stores raw `i64`s with a validity
+/// bitmap; the compiled scatter path reads struct fields directly into
+/// typed columns without ever constructing a `Value`.
+///
+/// So why does `Value` exist? Because the interpreted evaluator, the
+/// proto serde boundary, expression literals, test fixtures, and the
+/// UDF bridge all need a way to carry "a value of any type" through
+/// code that is generic over type. It is the path of least resistance
+/// for anything that is NOT the hot ingest/query path.
+///
+/// The goal is that `Value` never appears on the hot path. Every place
+/// it shows up today should be either:
+///   (a) cold-path infrastructure (schema transitions, serde, tests), or
+///   (b) the interpreted evaluator, which exists as a correctness
+///       reference and fallback -- not as the production execution mode.
+///
+/// If you find `Value` on a path that matters for latency, that is a
+/// bug in the architecture, not a reason to optimize `Value`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Null,
@@ -59,40 +81,6 @@ pub enum MapKey {
     TimestampTz(i64, i16),
 }
 
-/// A flat, `Copy`-able discriminant tag identifying which *family* a value belongs to.
-///
-/// `ValueKind` deliberately carries no parameters — no precision, no element types,
-/// no field lists. It is the moral equivalent of Substrait's "kind" and exists for
-/// fast switching, storage in bitmasks, and anywhere a full type tree would be
-/// needlessly heavy (e.g. discriminant checks in `Value::kind()`).
-///
-/// Contrast with [`ValueType`], which is a *tree* describing the complete type
-/// including parameters and recursively nested element/field types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ValueKind {
-    Null,
-    Bool,
-    I8, I16, I32, I64,
-    U8, U16, U32, U64,
-    F32, F64,
-    Date,
-    Uuid,
-    Ipv4,
-    Ipv6,
-    Blob,
-    Clob,
-    String,
-    DecimalI64,
-    DecimalI128,
-    Timestamp,
-    TimestampTz,
-    Enum,
-    Array,
-    Map,
-    Struct,
-    EntityRef,
-}
-
 // ---------------------------------------------------------------------------
 // ValueType — the full recursive type tree
 // ---------------------------------------------------------------------------
@@ -100,18 +88,14 @@ pub enum ValueKind {
 /// A complete, recursive type descriptor — the Rust counterpart of the
 /// `ValueType` message in `value.proto`.
 ///
-/// Where [`ValueKind`] is a flat tag ("`this is an Array`"), `ValueType` is the
-/// whole story ("`this is an Array whose elements are non-nullable Map<String,
-/// Timestamp(Millis, UtcOffset)>`"). Think of `ValueKind` as the top-level
-/// discriminant you get from [`ValueType::kind()`]; `ValueType` itself is the
-/// tree you need whenever you must reason about nested structure — schema
-/// validation, column decomposition, codegen, serde, and type checking.
+/// `ValueType` describes the full story ("`this is an Array whose elements are
+/// non-nullable Map<String, Timestamp(Millis, UtcOffset)>`"). It is the tree
+/// you need whenever you must reason about nested structure — schema validation,
+/// column decomposition, codegen, serde, and type checking.
 ///
-/// The parallel to Substrait is intentional: Substrait distinguishes *kinds*
-/// (simple tags) from *types* (parameterized, recursively composable).  We do
-/// the same.  Nullability is **not** part of `ValueType`; it lives only in
-/// containers ([`StructField`], `ArrayType::elements_nullable`,
-/// `MapType::values_nullable`) and at the column level.
+/// Nullability is **not** part of `ValueType`; it lives only in containers
+/// ([`StructField`], `ArrayType::elements_nullable`, `MapType::values_nullable`)
+/// and at the column level.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ValueType {
     // --- Scalar (no parameters) ---
@@ -187,41 +171,6 @@ pub enum TimestampTimezone {
 }
 
 impl ValueType {
-    /// Return the flat [`ValueKind`] tag for this type, discarding all parameters.
-    pub fn kind(&self) -> ValueKind {
-        match self {
-            ValueType::Null => ValueKind::Null,
-            ValueType::Bool => ValueKind::Bool,
-            ValueType::I8 => ValueKind::I8,
-            ValueType::I16 => ValueKind::I16,
-            ValueType::I32 => ValueKind::I32,
-            ValueType::I64 => ValueKind::I64,
-            ValueType::U8 => ValueKind::U8,
-            ValueType::U16 => ValueKind::U16,
-            ValueType::U32 => ValueKind::U32,
-            ValueType::U64 => ValueKind::U64,
-            ValueType::F32 => ValueKind::F32,
-            ValueType::F64 => ValueKind::F64,
-            ValueType::Date => ValueKind::Date,
-            ValueType::Uuid => ValueKind::Uuid,
-            ValueType::Ipv4 => ValueKind::Ipv4,
-            ValueType::Ipv6 => ValueKind::Ipv6,
-            ValueType::Blob => ValueKind::Blob,
-            ValueType::Clob => ValueKind::Clob,
-            ValueType::String => ValueKind::String,
-            ValueType::Decimal { precision, .. } => {
-                if *precision <= 18 { ValueKind::DecimalI64 } else { ValueKind::DecimalI128 }
-            }
-            ValueType::Timestamp { timezone: TimestampTimezone::None, .. } => ValueKind::Timestamp,
-            ValueType::Timestamp { timezone: TimestampTimezone::UtcOffset, .. } => ValueKind::TimestampTz,
-            ValueType::Enum { .. } => ValueKind::Enum,
-            ValueType::Array { .. } => ValueKind::Array,
-            ValueType::Map { .. } => ValueKind::Map,
-            ValueType::Struct { .. } => ValueKind::Struct,
-            ValueType::EntityRef { .. } => ValueKind::EntityRef,
-        }
-    }
-
     pub fn is_scalar(&self) -> bool {
         !matches!(self, ValueType::Array { .. } | ValueType::Map { .. } | ValueType::Struct { .. })
     }
@@ -232,38 +181,6 @@ impl ValueType {
 }
 
 impl Value {
-    pub fn kind(&self) -> ValueKind {
-        match self {
-            Value::Null => ValueKind::Null,
-            Value::Bool(_) => ValueKind::Bool,
-            Value::I8(_) => ValueKind::I8,
-            Value::I16(_) => ValueKind::I16,
-            Value::I32(_) => ValueKind::I32,
-            Value::I64(_) => ValueKind::I64,
-            Value::U8(_) => ValueKind::U8,
-            Value::U16(_) => ValueKind::U16,
-            Value::U32(_) => ValueKind::U32,
-            Value::U64(_) => ValueKind::U64,
-            Value::F32(_) => ValueKind::F32,
-            Value::F64(_) => ValueKind::F64,
-            Value::Date(_) => ValueKind::Date,
-            Value::Uuid(_) => ValueKind::Uuid,
-            Value::Ipv4(_) => ValueKind::Ipv4,
-            Value::Ipv6(_) => ValueKind::Ipv6,
-            Value::Blob(_) => ValueKind::Blob,
-            Value::Clob(_) => ValueKind::Clob,
-            Value::String(_) => ValueKind::String,
-            Value::DecimalI64(_) => ValueKind::DecimalI64,
-            Value::DecimalI128(_) => ValueKind::DecimalI128,
-            Value::Timestamp(_) => ValueKind::Timestamp,
-            Value::TimestampTz(_, _) => ValueKind::TimestampTz,
-            Value::Enum(_) => ValueKind::Enum,
-            Value::Array(_) => ValueKind::Array,
-            Value::Map(_) => ValueKind::Map,
-            Value::Struct(_) => ValueKind::Struct,
-        }
-    }
-
     pub fn is_null(&self) -> bool {
         matches!(self, Value::Null)
     }
@@ -680,6 +597,233 @@ mod proto_conv {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Value ↔ EncodedValue conversions (typed serde)
+// ---------------------------------------------------------------------------
+
+mod value_serde {
+    use super::*;
+    use crate::cluonflux::meta as pb;
+    use pb::encoded_value::Kind;
+
+    pub fn encode_value(value: &Value, _vt: &ValueType) -> pb::EncodedValue {
+        let kind = match value {
+            Value::Null => None,
+            Value::Bool(b) => Some(Kind::BoolValue(*b)),
+
+            Value::I8(v) => Some(Kind::IntValue(*v as i64)),
+            Value::I16(v) => Some(Kind::IntValue(*v as i64)),
+            Value::I32(v) => Some(Kind::IntValue(*v as i64)),
+            Value::I64(v) => Some(Kind::IntValue(*v)),
+            Value::Date(v) => Some(Kind::IntValue(*v as i64)),
+
+            Value::U8(v) => Some(Kind::UintValue(*v as u64)),
+            Value::U16(v) => Some(Kind::UintValue(*v as u64)),
+            Value::U32(v) => Some(Kind::UintValue(*v as u64)),
+            Value::U64(v) => Some(Kind::UintValue(*v)),
+            Value::Enum(v) => Some(Kind::UintValue(*v as u64)),
+
+            Value::F32(v) => Some(Kind::FloatValue(*v as f64)),
+            Value::F64(v) => Some(Kind::FloatValue(*v)),
+
+            Value::String(s) => Some(Kind::StringValue(s.clone())),
+
+            Value::Blob(b) => Some(Kind::BytesValue(b.clone())),
+            Value::Clob(b) => Some(Kind::BytesValue(b.clone())),
+            Value::Uuid(v) => Some(Kind::BytesValue(v.to_le_bytes().to_vec())),
+            Value::Ipv4(v) => Some(Kind::BytesValue(v.to_be_bytes().to_vec())),
+            Value::Ipv6(v) => Some(Kind::BytesValue(v.to_be_bytes().to_vec())),
+
+            Value::Timestamp(v) => Some(Kind::TimestampValue(*v)),
+            Value::TimestampTz(epoch, offset) => Some(Kind::TimestampTzValue(
+                pb::TimestampTzValue { epoch: *epoch, offset_minutes: *offset as i32 },
+            )),
+
+            Value::DecimalI64(v) => Some(Kind::DecimalI64Value(*v)),
+            Value::DecimalI128(v) => Some(Kind::DecimalI128Value(v.to_le_bytes().to_vec())),
+
+            Value::Struct(fields) => {
+                let struct_vt = match _vt {
+                    ValueType::Struct { fields: field_types } => field_types,
+                    _ => return pb::EncodedValue { kind: None },
+                };
+                let encoded_fields = fields.iter().enumerate().map(|(i, f)| {
+                    let ft = struct_vt.get(i)
+                        .map(|sf| &sf.value_type)
+                        .unwrap_or(&ValueType::Null);
+                    encode_value(f, ft)
+                }).collect();
+                Some(Kind::StructValue(pb::EncodedStructValue { fields: encoded_fields }))
+            }
+
+            Value::Array(elems) => {
+                let elem_vt = match _vt {
+                    ValueType::Array { element_type, .. } => element_type.as_ref(),
+                    _ => &ValueType::Null,
+                };
+                let encoded = elems.iter().map(|e| encode_value(e, elem_vt)).collect();
+                Some(Kind::ArrayValue(pb::EncodedArrayValue { elements: encoded }))
+            }
+
+            Value::Map(entries) => {
+                let (key_vt, val_vt) = match _vt {
+                    ValueType::Map { key_type, value_type, .. } => {
+                        (key_type.as_ref(), value_type.as_ref())
+                    }
+                    _ => (&ValueType::Null, &ValueType::Null),
+                };
+                let encoded = entries.iter().map(|(k, v)| {
+                    let key_val = map_key_to_value(k);
+                    pb::EncodedMapEntry {
+                        key: Some(encode_value(&key_val, key_vt)),
+                        value: Some(encode_value(v, val_vt)),
+                    }
+                }).collect();
+                Some(Kind::MapValue(pb::EncodedMapValue { entries: encoded }))
+            }
+        };
+        pb::EncodedValue { kind }
+    }
+
+    pub fn decode_value(proto: &pb::EncodedValue, vt: &ValueType) -> Value {
+        let kind = match &proto.kind {
+            None => return Value::Null,
+            Some(k) => k,
+        };
+
+        match (kind, vt) {
+            (Kind::BoolValue(b), _) => Value::Bool(*b),
+
+            (Kind::IntValue(v), ValueType::I8) => Value::I8(*v as i8),
+            (Kind::IntValue(v), ValueType::I16) => Value::I16(*v as i16),
+            (Kind::IntValue(v), ValueType::I32) => Value::I32(*v as i32),
+            (Kind::IntValue(v), ValueType::Date) => Value::Date(*v as i32),
+            (Kind::IntValue(v), _) => Value::I64(*v),
+
+            (Kind::UintValue(v), ValueType::U8) => Value::U8(*v as u8),
+            (Kind::UintValue(v), ValueType::U16) => Value::U16(*v as u16),
+            (Kind::UintValue(v), ValueType::U32) => Value::U32(*v as u32),
+            (Kind::UintValue(v), ValueType::Enum { .. }) => Value::Enum(*v as u32),
+            (Kind::UintValue(v), _) => Value::U64(*v),
+
+            (Kind::FloatValue(v), ValueType::F32) => Value::F32(*v as f32),
+            (Kind::FloatValue(v), _) => Value::F64(*v),
+
+            (Kind::StringValue(s), _) => Value::String(s.clone()),
+
+            (Kind::BytesValue(b), ValueType::Clob) => Value::Clob(b.clone()),
+            (Kind::BytesValue(b), ValueType::Uuid) => {
+                let arr: [u8; 16] = b.as_slice().try_into().unwrap_or([0; 16]);
+                Value::Uuid(u128::from_le_bytes(arr))
+            }
+            (Kind::BytesValue(b), ValueType::Ipv4) => {
+                let arr: [u8; 4] = b.as_slice().try_into().unwrap_or([0; 4]);
+                Value::Ipv4(u32::from_be_bytes(arr))
+            }
+            (Kind::BytesValue(b), ValueType::Ipv6) => {
+                let arr: [u8; 16] = b.as_slice().try_into().unwrap_or([0; 16]);
+                Value::Ipv6(u128::from_be_bytes(arr))
+            }
+            (Kind::BytesValue(b), _) => Value::Blob(b.clone()),
+
+            (Kind::TimestampValue(v), _) => Value::Timestamp(*v),
+            (Kind::TimestampTzValue(tz), _) => {
+                Value::TimestampTz(tz.epoch, tz.offset_minutes as i16)
+            }
+
+            (Kind::DecimalI64Value(v), _) => Value::DecimalI64(*v),
+            (Kind::DecimalI128Value(b), _) => {
+                let arr: [u8; 16] = b.as_slice().try_into().unwrap_or([0; 16]);
+                Value::DecimalI128(i128::from_le_bytes(arr))
+            }
+
+            (Kind::StructValue(sv), ValueType::Struct { fields: field_types }) => {
+                let values = sv.fields.iter().enumerate().map(|(i, f)| {
+                    let ft = field_types.get(i)
+                        .map(|sf| &sf.value_type)
+                        .unwrap_or(&ValueType::Null);
+                    decode_value(f, ft)
+                }).collect();
+                Value::Struct(values)
+            }
+            (Kind::StructValue(sv), _) => {
+                Value::Struct(sv.fields.iter().map(|f| decode_value(f, &ValueType::Null)).collect())
+            }
+
+            (Kind::ArrayValue(av), ValueType::Array { element_type, .. }) => {
+                Value::Array(av.elements.iter().map(|e| decode_value(e, element_type)).collect())
+            }
+            (Kind::ArrayValue(av), _) => {
+                Value::Array(av.elements.iter().map(|e| decode_value(e, &ValueType::Null)).collect())
+            }
+
+            (Kind::MapValue(mv), ValueType::Map { key_type, value_type, .. }) => {
+                let map = mv.entries.iter().filter_map(|e| {
+                    let k = e.key.as_ref().map(|k| decode_value(k, key_type))?;
+                    let v = e.value.as_ref().map(|v| decode_value(v, value_type))?;
+                    let mk = value_to_map_key(&k)?;
+                    Some((mk, v))
+                }).collect();
+                Value::Map(map)
+            }
+            (Kind::MapValue(mv), _) => {
+                let map = mv.entries.iter().filter_map(|e| {
+                    let k = e.key.as_ref().map(|k| decode_value(k, &ValueType::Null))?;
+                    let v = e.value.as_ref().map(|v| decode_value(v, &ValueType::Null))?;
+                    let mk = value_to_map_key(&k)?;
+                    Some((mk, v))
+                }).collect();
+                Value::Map(map)
+            }
+        }
+    }
+
+    fn map_key_to_value(k: &MapKey) -> Value {
+        match k {
+            MapKey::Bool(v) => Value::Bool(*v),
+            MapKey::I8(v) => Value::I8(*v),
+            MapKey::I16(v) => Value::I16(*v),
+            MapKey::I32(v) => Value::I32(*v),
+            MapKey::I64(v) => Value::I64(*v),
+            MapKey::U8(v) => Value::U8(*v),
+            MapKey::U16(v) => Value::U16(*v),
+            MapKey::U32(v) => Value::U32(*v),
+            MapKey::U64(v) => Value::U64(*v),
+            MapKey::Date(v) => Value::Date(*v),
+            MapKey::Uuid(v) => Value::Uuid(*v),
+            MapKey::Ipv4(v) => Value::Ipv4(*v),
+            MapKey::Ipv6(v) => Value::Ipv6(*v),
+            MapKey::String(s) => Value::String(s.clone()),
+            MapKey::Timestamp(v) => Value::Timestamp(*v),
+            MapKey::TimestampTz(v, off) => Value::TimestampTz(*v, *off),
+        }
+    }
+
+    fn value_to_map_key(v: &Value) -> Option<MapKey> {
+        Some(match v {
+            Value::Bool(b) => MapKey::Bool(*b),
+            Value::I8(n) => MapKey::I8(*n),
+            Value::I16(n) => MapKey::I16(*n),
+            Value::I32(n) => MapKey::I32(*n),
+            Value::I64(n) => MapKey::I64(*n),
+            Value::U8(n) => MapKey::U8(*n),
+            Value::U16(n) => MapKey::U16(*n),
+            Value::U32(n) => MapKey::U32(*n),
+            Value::U64(n) => MapKey::U64(*n),
+            Value::Date(n) => MapKey::Date(*n),
+            Value::Uuid(n) => MapKey::Uuid(*n),
+            Value::Ipv4(n) => MapKey::Ipv4(*n),
+            Value::Ipv6(n) => MapKey::Ipv6(*n),
+            Value::String(s) => MapKey::String(s.clone()),
+            Value::Timestamp(n) => MapKey::Timestamp(*n),
+            Value::TimestampTz(n, off) => MapKey::TimestampTz(*n, *off),
+            _ => return None,
+        })
+    }
+}
+
+pub use value_serde::{encode_value, decode_value};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -767,5 +911,96 @@ mod tests {
         let block = parse_cidr("fe80::/10").unwrap();
         assert!(block.contains_v6(0xfe80_0000_0000_0000_0000_0000_0000_0001));
         assert!(!block.contains_v6(0xff00_0000_0000_0000_0000_0000_0000_0001));
+    }
+
+    fn round_trip(value: Value, vt: ValueType) {
+        let encoded = encode_value(&value, &vt);
+        let decoded = decode_value(&encoded, &vt);
+        assert_eq!(decoded, value, "round-trip failed for {vt:?}");
+    }
+
+    #[test]
+    fn value_serde_scalars() {
+        round_trip(Value::Null, ValueType::I64);
+        round_trip(Value::Bool(true), ValueType::Bool);
+        round_trip(Value::Bool(false), ValueType::Bool);
+        round_trip(Value::I8(-42), ValueType::I8);
+        round_trip(Value::I16(1000), ValueType::I16);
+        round_trip(Value::I32(-100_000), ValueType::I32);
+        round_trip(Value::I64(i64::MAX), ValueType::I64);
+        round_trip(Value::U8(255), ValueType::U8);
+        round_trip(Value::U16(60000), ValueType::U16);
+        round_trip(Value::U32(4_000_000_000), ValueType::U32);
+        round_trip(Value::U64(u64::MAX), ValueType::U64);
+        round_trip(Value::F64(3.14), ValueType::F64);
+        round_trip(Value::String("hello".into()), ValueType::String);
+        round_trip(Value::Blob(vec![1, 2, 3]), ValueType::Blob);
+        round_trip(Value::Date(19000), ValueType::Date);
+        round_trip(Value::Timestamp(1_700_000_000_000), ValueType::Timestamp {
+            precision: TimestampPrecision::Millis,
+            timezone: TimestampTimezone::None,
+        });
+        round_trip(Value::TimestampTz(1_700_000_000, -300), ValueType::Timestamp {
+            precision: TimestampPrecision::Seconds,
+            timezone: TimestampTimezone::UtcOffset,
+        });
+        round_trip(Value::Uuid(0xdeadbeef_12345678_aabbccdd_eeff0011), ValueType::Uuid);
+        round_trip(Value::Ipv4(0xc0a80101), ValueType::Ipv4);
+        round_trip(Value::Ipv6(0xfe80_0000_0000_0000_0000_0000_0000_0001), ValueType::Ipv6);
+        round_trip(Value::Enum(42), ValueType::Enum { values: vec![] });
+        round_trip(Value::DecimalI64(12345), ValueType::Decimal { precision: 10, scale: 2 });
+        round_trip(Value::DecimalI128(99999999999999999), ValueType::Decimal { precision: 30, scale: 5 });
+    }
+
+    #[test]
+    fn value_serde_struct() {
+        let vt = ValueType::Struct {
+            fields: vec![
+                StructField { name: "name".into(), human_name: "".into(), value_type: ValueType::String, nullable: false },
+                StructField { name: "age".into(), human_name: "".into(), value_type: ValueType::I64, nullable: true },
+            ],
+        };
+        let value = Value::Struct(vec![
+            Value::String("alice".into()),
+            Value::I64(30),
+        ]);
+        round_trip(value, vt.clone());
+
+        let with_null = Value::Struct(vec![
+            Value::String("bob".into()),
+            Value::Null,
+        ]);
+        round_trip(with_null, vt);
+    }
+
+    #[test]
+    fn value_serde_array() {
+        let vt = ValueType::Array {
+            element_type: Box::new(ValueType::I64),
+            elements_nullable: false,
+        };
+        round_trip(Value::Array(vec![Value::I64(1), Value::I64(2), Value::I64(3)]), vt);
+    }
+
+    #[test]
+    fn value_serde_map() {
+        let vt = ValueType::Map {
+            key_type: Box::new(ValueType::String),
+            value_type: Box::new(ValueType::I64),
+            values_nullable: false,
+        };
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(MapKey::String("a".into()), Value::I64(1));
+        map.insert(MapKey::String("b".into()), Value::I64(2));
+        round_trip(Value::Map(map), vt);
+    }
+
+    #[test]
+    fn value_serde_f32_lossy() {
+        let vt = ValueType::F32;
+        let val = Value::F32(1.5);
+        let encoded = encode_value(&val, &vt);
+        let decoded = decode_value(&encoded, &vt);
+        assert_eq!(decoded, Value::F32(1.5));
     }
 }

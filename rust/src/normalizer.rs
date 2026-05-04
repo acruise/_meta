@@ -239,6 +239,11 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
             args: args.iter().map(|a| Box::new(normalize(a))).collect(),
         },
 
+        LogExpr::NativeCall { function_id, args } => LogExpr::NativeCall {
+            function_id: function_id.clone(),
+            args: args.iter().map(|a| Box::new(normalize(a))).collect(),
+        },
+
         // Case
         LogExpr::Case { arms, default } => LogExpr::Case {
             arms: arms.iter().map(|(c, r)| (n(c), n(r))).collect(),
