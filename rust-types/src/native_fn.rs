@@ -286,9 +286,9 @@ mod tests {
         let entry = test_entry("str_len", vec![param("s", ValueType::String)], ValueType::I64);
         let f = native_fn_1(entry, |s: String| -> i64 { s.len() as i64 });
         let nf: &dyn NativeFn = &f;
-        assert_eq!(nf.name(), "str_len");
-        assert_eq!(nf.param_types(), vec![ValueType::String]);
-        assert_eq!(nf.return_type(), ValueType::I64);
+        assert_eq!(nf.catalog_entry().cel_name, "str_len");
+        assert_eq!(nf.catalog_entry().params.iter().map(|p| p.value_type.clone()).collect::<Vec<_>>(), vec![ValueType::String]);
+        assert_eq!(nf.catalog_entry().return_type, ValueType::I64);
         let result = f.call(&[enc_string("hello")]);
         assert_eq!(result.kind, Some(Kind::IntValue(5)));
     }
@@ -322,7 +322,7 @@ mod tests {
         let entry = test_entry("add", vec![param("a", ValueType::I64), param("b", ValueType::I64)], ValueType::I64);
         let f = native_fn_2(entry, |a: i64, b: i64| -> i64 { a + b });
         let nf: &dyn NativeFn = &f;
-        assert_eq!(nf.param_types(), vec![ValueType::I64, ValueType::I64]);
+        assert_eq!(nf.catalog_entry().params.len(), 2);
         let result = f.call(&[enc_i64(3), enc_i64(7)]);
         assert_eq!(result.kind, Some(Kind::IntValue(10)));
     }
@@ -348,7 +348,7 @@ mod tests {
         });
 
         let nf: &dyn NativeFn = &f;
-        assert_eq!(nf.return_type(), return_type);
+        assert_eq!(nf.catalog_entry().return_type, return_type);
 
         let result = f.call(&[enc_string("Mozilla/5.0 Firefox/120")]);
         match &result.kind {
