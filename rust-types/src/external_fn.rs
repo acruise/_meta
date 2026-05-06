@@ -139,6 +139,49 @@ impl ProtoSerde for EncodedStruct {
 }
 
 // ---------------------------------------------------------------------------
+// ResolvedUdfRef -- fully-qualified reference to an external UDF
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResolvedUdfRef {
+    pub namespace: String,
+    pub version: String,
+    pub cel_name: String,
+}
+
+impl std::fmt::Display for ResolvedUdfRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}:{}", self.namespace, self.version, self.cel_name)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// UdfImport -- query-level import declaration for external UDFs
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct UdfImport {
+    pub namespace: String,
+    pub version: String,
+    pub cel_name: String,
+    pub alias: Option<String>,
+}
+
+impl UdfImport {
+    pub fn visible_name(&self) -> &str {
+        self.alias.as_deref().unwrap_or(&self.cel_name)
+    }
+
+    pub fn to_resolved(&self) -> ResolvedUdfRef {
+        ResolvedUdfRef {
+            namespace: self.namespace.clone(),
+            version: self.version.clone(),
+            cel_name: self.cel_name.clone(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // UdfModuleMeta -- package-level metadata for an external UDF module
 // ---------------------------------------------------------------------------
 

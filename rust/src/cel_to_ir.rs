@@ -337,8 +337,8 @@ fn convert_free_function(
                 let converted_args: Vec<Box<LogExpr>> = args.iter()
                     .map(|a| Ok(Box::new(convert_with_udfs(a, has_udf, external_names)?)))
                     .collect::<Result<_, CelConvertError>>()?;
-                Ok(LogExpr::ExternalCall {
-                    function_id: name.to_string(),
+                Ok(LogExpr::UnresolvedCall {
+                    name: name.to_string(),
                     args: converted_args,
                 })
             } else {

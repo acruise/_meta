@@ -160,8 +160,12 @@ pub enum LogExpr {
     /// The authoritative representation is the compiled program in the side table.
     CelFallback { source: String, args: Vec<Box<LogExpr>> },
 
-    /// Dispatch to a registered external UDF by function_id.
-    ExternalCall { function_id: String, args: Vec<Box<LogExpr>> },
+    /// Unresolved external UDF call (from CEL parse). Must be resolved
+    /// against the query's import list before type checking.
+    UnresolvedCall { name: String, args: Vec<Box<LogExpr>> },
+
+    /// Resolved external UDF call with fully-qualified reference.
+    ExternalCall { udf: meta_types::external_fn::ResolvedUdfRef, args: Vec<Box<LogExpr>> },
 
     /// Multi-way conditional (desugared CASE).
     Case { arms: Vec<(Box<LogExpr>, Box<LogExpr>)>, default: Box<LogExpr> },
@@ -174,7 +178,7 @@ impl LogExpr {
         match self {
             Self::GetFieldByName { .. } | Self::GetFieldByIndex { .. } => CoeffectSet::event_data(),
             Self::CelFallback { .. } => CoeffectSet::all(),
-            Self::ExternalCall { .. } => {
+            Self::UnresolvedCall { .. } | Self::ExternalCall { .. } => {
                 let mut s = CoeffectSet::new();
                 s.insert(crate::coeffects::Coeffect::CallsExternalUdf(crate::coeffects::UdfLanguage::Opaque));
                 s
@@ -271,7 +275,7 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
             result = result.union(transitive_coeffects(collection));
             result = result.union(transitive_coeffects(body));
         },
-        LogExpr::CelFallback { args, .. } | LogExpr::ExternalCall { args, .. } => {
+        LogExpr::CelFallback { args, .. } | LogExpr::UnresolvedCall { args, .. } | LogExpr::ExternalCall { args, .. } => {
             for arg in args {
                 result = result.union(transitive_coeffects(arg));
             }
@@ -297,3 +301,4 @@ impl LogExpr {
         transitive_coeffects(self).is_pure()
     }
 }
+

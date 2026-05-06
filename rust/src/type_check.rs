@@ -3,7 +3,9 @@ use crate::value::{Value, ValueType};
 
 #[derive(Debug, Clone)]
 pub struct ExternalUdfMeta {
-    pub name: String,
+    pub namespace: String,
+    pub version: String,
+    pub cel_name: String,
     pub param_types: Vec<ValueType>,
     pub return_type: ValueType,
 }
@@ -11,7 +13,9 @@ pub struct ExternalUdfMeta {
 impl From<&meta_types::external_fn::UdfCatalogEntry> for ExternalUdfMeta {
     fn from(entry: &meta_types::external_fn::UdfCatalogEntry) -> Self {
         Self {
-            name: entry.cel_name.clone(),
+            namespace: entry.namespace.clone(),
+            version: entry.version.clone(),
+            cel_name: entry.cel_name.clone(),
             param_types: entry.params.iter().map(|p| p.value_type.clone()).collect(),
             return_type: entry.return_type.clone(),
         }
@@ -19,7 +23,7 @@ impl From<&meta_types::external_fn::UdfCatalogEntry> for ExternalUdfMeta {
 }
 
 const _: () = assert!(
-    crate::expr_gen::EXPR_GEN_HASH == 0xc7a6557d784e39c1,
+    crate::expr_gen::EXPR_GEN_HASH == 0x705402accb3aef90,
     "type_check.rs needs review — EXPR_GEN_HASH changed"
 );
 
@@ -49,8 +53,10 @@ impl ExprSchema {
         self.event_fields.iter().find(|f| f.name == name).map(|f| &f.value_type)
     }
 
-    pub fn lookup_external_udf(&self, name: &str) -> Option<&ExternalUdfMeta> {
-        self.external_udfs.iter().find(|u| u.name == name)
+    pub fn lookup_external_udf(&self, udf: &meta_types::external_fn::ResolvedUdfRef) -> Option<&ExternalUdfMeta> {
+        self.external_udfs.iter().find(|u| {
+            u.namespace == udf.namespace && u.version == udf.version && u.cel_name == udf.cel_name
+        })
     }
 }
 
@@ -332,15 +338,23 @@ impl TypeChecker {
                 Ok((LogExpr::CelFallback { source: source.clone(), args: checked_args }, ValueType::Null))
             }
 
-            LogExpr::ExternalCall { function_id, args } => {
+            LogExpr::UnresolvedCall { name, .. } => {
+                Err(TypeError {
+                    message: format!(
+                        "unresolved external call '{name}': run the UDF resolver before type checking"
+                    ),
+                })
+            }
+
+            LogExpr::ExternalCall { udf, args } => {
                 let checked_args: Vec<Box<LogExpr>> = args.iter()
                     .map(|a| self.check(a).map(|(e, _)| Box::new(e)))
                     .collect::<Result<_, _>>()?;
-                let return_type = self.schema.lookup_external_udf(function_id)
+                let return_type = self.schema.lookup_external_udf(udf)
                     .map(|m| m.return_type.clone())
                     .unwrap_or(ValueType::Null);
                 Ok((LogExpr::ExternalCall {
-                    function_id: function_id.clone(),
+                    udf: udf.clone(),
                     args: checked_args,
                 }, return_type))
             }

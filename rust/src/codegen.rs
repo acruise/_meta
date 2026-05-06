@@ -307,8 +307,12 @@ fn emit_logical_ir(
     writeln!(out, "    /// The authoritative representation is the compiled program in the side table.").unwrap();
     writeln!(out, "    CelFallback {{ source: String, args: Vec<Box<LogExpr>> }},").unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "    /// Dispatch to a registered external UDF by function_id.").unwrap();
-    writeln!(out, "    ExternalCall {{ function_id: String, args: Vec<Box<LogExpr>> }},").unwrap();
+    writeln!(out, "    /// Unresolved external UDF call (from CEL parse). Must be resolved").unwrap();
+    writeln!(out, "    /// against the query's import list before type checking.").unwrap();
+    writeln!(out, "    UnresolvedCall {{ name: String, args: Vec<Box<LogExpr>> }},").unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "    /// Resolved external UDF call with fully-qualified reference.").unwrap();
+    writeln!(out, "    ExternalCall {{ udf: meta_types::external_fn::ResolvedUdfRef, args: Vec<Box<LogExpr>> }},").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "    /// Multi-way conditional (desugared CASE).").unwrap();
     writeln!(out, "    Case {{ arms: Vec<(Box<LogExpr>, Box<LogExpr>)>, default: Box<LogExpr> }},").unwrap();
@@ -333,7 +337,7 @@ fn emit_intrinsic_coeffects(
 
     writeln!(out, "            Self::GetFieldByName {{ .. }} | Self::GetFieldByIndex {{ .. }} => CoeffectSet::event_data(),").unwrap();
     writeln!(out, "            Self::CelFallback {{ .. }} => CoeffectSet::all(),").unwrap();
-    writeln!(out, "            Self::ExternalCall {{ .. }} => {{").unwrap();
+    writeln!(out, "            Self::UnresolvedCall {{ .. }} | Self::ExternalCall {{ .. }} => {{").unwrap();
     writeln!(out, "                let mut s = CoeffectSet::new();").unwrap();
     writeln!(out, "                s.insert(crate::coeffects::Coeffect::CallsExternalUdf(crate::coeffects::UdfLanguage::Opaque));").unwrap();
     writeln!(out, "                s").unwrap();
@@ -477,8 +481,8 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "            result = result.union(transitive_coeffects(body));").unwrap();
     writeln!(out, "        }},").unwrap();
 
-    // CelFallback / ExternalCall: args
-    writeln!(out, "        LogExpr::CelFallback {{ args, .. }} | LogExpr::ExternalCall {{ args, .. }} => {{").unwrap();
+    // CelFallback / UnresolvedCall / ExternalCall: args
+    writeln!(out, "        LogExpr::CelFallback {{ args, .. }} | LogExpr::UnresolvedCall {{ args, .. }} | LogExpr::ExternalCall {{ args, .. }} => {{").unwrap();
     writeln!(out, "            for arg in args {{").unwrap();
     writeln!(out, "                result = result.union(transitive_coeffects(arg));").unwrap();
     writeln!(out, "            }}").unwrap();

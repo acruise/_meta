@@ -241,8 +241,13 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
             args: args.iter().map(|a| Box::new(normalize(a))).collect(),
         },
 
-        LogExpr::ExternalCall { function_id, args } => LogExpr::ExternalCall {
-            function_id: function_id.clone(),
+        LogExpr::UnresolvedCall { name, args } => LogExpr::UnresolvedCall {
+            name: name.clone(),
+            args: args.iter().map(|a| Box::new(normalize(a))).collect(),
+        },
+
+        LogExpr::ExternalCall { udf, args } => LogExpr::ExternalCall {
+            udf: udf.clone(),
             args: args.iter().map(|a| Box::new(normalize(a))).collect(),
         },
 
