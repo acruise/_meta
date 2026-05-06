@@ -1,4 +1,4 @@
-//! Native UDF scaffolding.
+//! External UDF scaffolding.
 //!
 //! UDF authors write plain Rust functions with arbitrary input/output types.
 //! The framework bridges those types to proto-encoded values via the
@@ -23,7 +23,6 @@ use pb::encoded_value::Kind;
 // ---------------------------------------------------------------------------
 
 pub trait ProtoSerde: Sized {
-    fn value_type() -> ValueType;
     fn decode(v: &pb::EncodedValue) -> Option<Self>;
     fn encode(&self) -> pb::EncodedValue;
 }
@@ -33,7 +32,6 @@ pub trait ProtoSerde: Sized {
 // ---------------------------------------------------------------------------
 
 impl ProtoSerde for String {
-    fn value_type() -> ValueType { ValueType::String }
     fn decode(v: &pb::EncodedValue) -> Option<Self> {
         match &v.kind { Some(Kind::StringValue(s)) => Some(s.clone()), _ => None }
     }
@@ -43,7 +41,6 @@ impl ProtoSerde for String {
 }
 
 impl ProtoSerde for i64 {
-    fn value_type() -> ValueType { ValueType::I64 }
     fn decode(v: &pb::EncodedValue) -> Option<Self> {
         match &v.kind { Some(Kind::IntValue(n)) => Some(*n), _ => None }
     }
@@ -53,7 +50,6 @@ impl ProtoSerde for i64 {
 }
 
 impl ProtoSerde for u64 {
-    fn value_type() -> ValueType { ValueType::U64 }
     fn decode(v: &pb::EncodedValue) -> Option<Self> {
         match &v.kind { Some(Kind::UintValue(n)) => Some(*n), _ => None }
     }
@@ -63,7 +59,6 @@ impl ProtoSerde for u64 {
 }
 
 impl ProtoSerde for f64 {
-    fn value_type() -> ValueType { ValueType::F64 }
     fn decode(v: &pb::EncodedValue) -> Option<Self> {
         match &v.kind { Some(Kind::FloatValue(n)) => Some(*n), _ => None }
     }
@@ -73,7 +68,6 @@ impl ProtoSerde for f64 {
 }
 
 impl ProtoSerde for bool {
-    fn value_type() -> ValueType { ValueType::Bool }
     fn decode(v: &pb::EncodedValue) -> Option<Self> {
         match &v.kind { Some(Kind::BoolValue(b)) => Some(*b), _ => None }
     }
@@ -83,7 +77,6 @@ impl ProtoSerde for bool {
 }
 
 impl<T: ProtoSerde> ProtoSerde for Option<T> {
-    fn value_type() -> ValueType { T::value_type() }
     fn decode(v: &pb::EncodedValue) -> Option<Self> {
         if v.kind.is_none() { Some(None) } else { Some(T::decode(v)) }
     }
@@ -96,7 +89,6 @@ impl<T: ProtoSerde> ProtoSerde for Option<T> {
 }
 
 impl ProtoSerde for Vec<u8> {
-    fn value_type() -> ValueType { ValueType::Blob }
     fn decode(v: &pb::EncodedValue) -> Option<Self> {
         match &v.kind { Some(Kind::BytesValue(b)) => Some(b.clone()), _ => None }
     }
@@ -133,10 +125,6 @@ impl EncodedStruct {
 }
 
 impl ProtoSerde for EncodedStruct {
-    fn value_type() -> ValueType {
-        ValueType::Struct { fields: vec![] }
-    }
-
     fn decode(_v: &pb::EncodedValue) -> Option<Self> {
         None
     }
@@ -151,11 +139,24 @@ impl ProtoSerde for EncodedStruct {
 }
 
 // ---------------------------------------------------------------------------
-// UdfCatalogEntry -- mandatory metadata descriptor for a native UDF
+// UdfModuleMeta -- package-level metadata for an external UDF module
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct UdfModuleMeta {
+    pub namespace: String,
+    pub version: String,
+    pub functions: Vec<UdfCatalogEntry>,
+}
+
+// ---------------------------------------------------------------------------
+// UdfCatalogEntry -- mandatory metadata descriptor for an external UDF
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 pub struct UdfCatalogEntry {
+    pub namespace: String,
+    pub version: String,
     pub id: String,
     pub cel_name: String,
     pub description: String,
@@ -171,29 +172,29 @@ pub struct UdfParam {
 }
 
 // ---------------------------------------------------------------------------
-// NativeFn -- the type-erased UDF interface (proto only)
+// ExternalFn -- the type-erased UDF interface (proto only)
 // ---------------------------------------------------------------------------
 
-pub trait NativeFn: Send + Sync {
+pub trait ExternalFn: Send + Sync {
     fn catalog_entry(&self) -> &UdfCatalogEntry;
     fn call(&self, args: &[pb::EncodedValue]) -> pb::EncodedValue;
 }
 
 // Access metadata through catalog_entry() directly. Inherent methods
-// on `dyn NativeFn` cause borrow-checker issues when the trait object
+// on `dyn ExternalFn` cause borrow-checker issues when the trait object
 // is behind references (e.g. in closures passed to Iterator::find).
 
 // ---------------------------------------------------------------------------
-// Typed wrappers -- bridge plain Rust functions to NativeFn
+// Typed wrappers -- bridge plain Rust functions to ExternalFn
 // ---------------------------------------------------------------------------
 
-pub struct NativeFn1<A, R, F> {
+pub struct ExternalFn1<A, R, F> {
     pub entry: UdfCatalogEntry,
     pub func: F,
     pub _phantom: std::marker::PhantomData<fn(A) -> R>,
 }
 
-impl<A, R, F> NativeFn for NativeFn1<A, R, F>
+impl<A, R, F> ExternalFn for ExternalFn1<A, R, F>
 where
     A: ProtoSerde + Send + Sync,
     R: ProtoSerde + Send + Sync,
@@ -210,13 +211,13 @@ where
     }
 }
 
-pub struct NativeFn2<A1, A2, R, F> {
+pub struct ExternalFn2<A1, A2, R, F> {
     pub entry: UdfCatalogEntry,
     pub func: F,
     pub _phantom: std::marker::PhantomData<fn(A1, A2) -> R>,
 }
 
-impl<A1, A2, R, F> NativeFn for NativeFn2<A1, A2, R, F>
+impl<A1, A2, R, F> ExternalFn for ExternalFn2<A1, A2, R, F>
 where
     A1: ProtoSerde + Send + Sync,
     A2: ProtoSerde + Send + Sync,
@@ -238,18 +239,18 @@ where
     }
 }
 
-pub fn native_fn_1<A: ProtoSerde, R: ProtoSerde>(
+pub fn external_fn_1<A: ProtoSerde, R: ProtoSerde>(
     entry: UdfCatalogEntry,
     func: impl Fn(A) -> R + Send + Sync,
-) -> NativeFn1<A, R, impl Fn(A) -> R + Send + Sync> {
-    NativeFn1 { entry, func, _phantom: std::marker::PhantomData }
+) -> ExternalFn1<A, R, impl Fn(A) -> R + Send + Sync> {
+    ExternalFn1 { entry, func, _phantom: std::marker::PhantomData }
 }
 
-pub fn native_fn_2<A1: ProtoSerde, A2: ProtoSerde, R: ProtoSerde>(
+pub fn external_fn_2<A1: ProtoSerde, A2: ProtoSerde, R: ProtoSerde>(
     entry: UdfCatalogEntry,
     func: impl Fn(A1, A2) -> R + Send + Sync,
-) -> NativeFn2<A1, A2, R, impl Fn(A1, A2) -> R + Send + Sync> {
-    NativeFn2 { entry, func, _phantom: std::marker::PhantomData }
+) -> ExternalFn2<A1, A2, R, impl Fn(A1, A2) -> R + Send + Sync> {
+    ExternalFn2 { entry, func, _phantom: std::marker::PhantomData }
 }
 
 #[cfg(test)]
@@ -268,6 +269,8 @@ mod tests {
 
     fn test_entry(cel_name: &str, params: Vec<UdfParam>, return_type: ValueType) -> UdfCatalogEntry {
         UdfCatalogEntry {
+            namespace: "test".into(),
+            version: "0".into(),
             id: cel_name.into(),
             cel_name: cel_name.into(),
             description: String::new(),
@@ -282,10 +285,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fn_1_string_to_i64() {
+    fn external_fn_1_string_to_i64() {
         let entry = test_entry("str_len", vec![param("s", ValueType::String)], ValueType::I64);
-        let f = native_fn_1(entry, |s: String| -> i64 { s.len() as i64 });
-        let nf: &dyn NativeFn = &f;
+        let f = external_fn_1(entry, |s: String| -> i64 { s.len() as i64 });
+        let nf: &dyn ExternalFn = &f;
         assert_eq!(nf.catalog_entry().cel_name, "str_len");
         assert_eq!(nf.catalog_entry().params.iter().map(|p| p.value_type.clone()).collect::<Vec<_>>(), vec![ValueType::String]);
         assert_eq!(nf.catalog_entry().return_type, ValueType::I64);
@@ -294,23 +297,23 @@ mod tests {
     }
 
     #[test]
-    fn native_fn_1_null_returns_null() {
+    fn external_fn_1_null_returns_null() {
         let entry = test_entry("str_len", vec![param("s", ValueType::String)], ValueType::I64);
-        let f = native_fn_1(entry, |s: String| -> i64 { s.len() as i64 });
+        let f = external_fn_1(entry, |s: String| -> i64 { s.len() as i64 });
         assert_eq!(f.call(&[null()]).kind, None);
     }
 
     #[test]
-    fn native_fn_1_wrong_type_returns_null() {
+    fn external_fn_1_wrong_type_returns_null() {
         let entry = test_entry("str_len", vec![param("s", ValueType::String)], ValueType::I64);
-        let f = native_fn_1(entry, |s: String| -> i64 { s.len() as i64 });
+        let f = external_fn_1(entry, |s: String| -> i64 { s.len() as i64 });
         assert_eq!(f.call(&[enc_i64(42)]).kind, None);
     }
 
     #[test]
-    fn native_fn_1_optional_arg() {
+    fn external_fn_1_optional_arg() {
         let entry = test_entry("maybe_double", vec![param("n", ValueType::I64)], ValueType::I64);
-        let f = native_fn_1(entry, |n: Option<i64>| -> Option<i64> {
+        let f = external_fn_1(entry, |n: Option<i64>| -> Option<i64> {
             n.map(|v| v * 2)
         });
         assert_eq!(f.call(&[enc_i64(21)]).kind, Some(Kind::IntValue(42)));
@@ -318,10 +321,10 @@ mod tests {
     }
 
     #[test]
-    fn native_fn_2_add() {
+    fn external_fn_2_add() {
         let entry = test_entry("add", vec![param("a", ValueType::I64), param("b", ValueType::I64)], ValueType::I64);
-        let f = native_fn_2(entry, |a: i64, b: i64| -> i64 { a + b });
-        let nf: &dyn NativeFn = &f;
+        let f = external_fn_2(entry, |a: i64, b: i64| -> i64 { a + b });
+        let nf: &dyn ExternalFn = &f;
         assert_eq!(nf.catalog_entry().params.len(), 2);
         let result = f.call(&[enc_i64(3), enc_i64(7)]);
         assert_eq!(result.kind, Some(Kind::IntValue(10)));
@@ -336,7 +339,7 @@ mod tests {
         let return_type = ValueType::Struct { fields: schema.clone() };
         let entry = test_entry("parse_ua", vec![param("agent", ValueType::String)], return_type.clone());
 
-        let f = native_fn_1(entry, move |agent: String| -> EncodedStruct {
+        let f = external_fn_1(entry, move |agent: String| -> EncodedStruct {
             let mut s = EncodedStruct::new(schema.clone());
             if agent.contains("Firefox") {
                 s.push("Firefox".to_string());
@@ -347,7 +350,7 @@ mod tests {
             s
         });
 
-        let nf: &dyn NativeFn = &f;
+        let nf: &dyn ExternalFn = &f;
         assert_eq!(nf.catalog_entry().return_type, return_type);
 
         let result = f.call(&[enc_string("Mozilla/5.0 Firefox/120")]);
@@ -384,7 +387,7 @@ mod tests {
     #[test]
     fn round_trip_through_proto() {
         let entry = test_entry("upper", vec![param("s", ValueType::String)], ValueType::String);
-        let f = native_fn_1(entry, |s: String| -> String { s.to_uppercase() });
+        let f = external_fn_1(entry, |s: String| -> String { s.to_uppercase() });
 
         let input = "hello".to_string();
         let encoded_arg = input.encode();
@@ -396,7 +399,7 @@ mod tests {
     #[test]
     fn catalog_entry_accessible() {
         let entry = test_entry("my_fn", vec![param("x", ValueType::I64)], ValueType::Bool);
-        let f = native_fn_1(entry, |_x: i64| -> bool { true });
+        let f = external_fn_1(entry, |_x: i64| -> bool { true });
         let e = f.catalog_entry();
         assert_eq!(e.id, "my_fn");
         assert_eq!(e.cel_name, "my_fn");

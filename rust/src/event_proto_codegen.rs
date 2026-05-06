@@ -187,7 +187,7 @@ mod tests {
                 FieldSchema { name: "status".into(), value_type: ValueType::String, nullable: false },
             ],
             enrichment_fields: vec![],
-            native_udfs: vec![],
+            external_udfs: vec![],
         }
     }
 
@@ -236,7 +236,7 @@ mod tests {
                 FieldSchema { name: "name".into(), value_type: ValueType::String, nullable: false },
             ],
             enrichment_fields: vec![],
-            native_udfs: vec![],
+            external_udfs: vec![],
         };
         let proto = generate_event_proto(&schema, "MixedEvent", "test.v1");
         assert!(proto.contains("bool active = 1;"));

@@ -2,14 +2,14 @@ use crate::expr_gen::LogExpr;
 use crate::value::{Value, ValueType};
 
 #[derive(Debug, Clone)]
-pub struct NativeUdfMeta {
+pub struct ExternalUdfMeta {
     pub name: String,
     pub param_types: Vec<ValueType>,
     pub return_type: ValueType,
 }
 
-impl From<&meta_types::native_fn::UdfCatalogEntry> for NativeUdfMeta {
-    fn from(entry: &meta_types::native_fn::UdfCatalogEntry) -> Self {
+impl From<&meta_types::external_fn::UdfCatalogEntry> for ExternalUdfMeta {
+    fn from(entry: &meta_types::external_fn::UdfCatalogEntry) -> Self {
         Self {
             name: entry.cel_name.clone(),
             param_types: entry.params.iter().map(|p| p.value_type.clone()).collect(),
@@ -19,7 +19,7 @@ impl From<&meta_types::native_fn::UdfCatalogEntry> for NativeUdfMeta {
 }
 
 const _: () = assert!(
-    crate::expr_gen::EXPR_GEN_HASH == 0x4a4eae9257668bf3,
+    crate::expr_gen::EXPR_GEN_HASH == 0xc7a6557d784e39c1,
     "type_check.rs needs review — EXPR_GEN_HASH changed"
 );
 
@@ -41,7 +41,7 @@ pub struct FieldSchema {
 pub struct ExprSchema {
     pub event_fields: Vec<FieldSchema>,
     pub enrichment_fields: Vec<FieldSchema>,
-    pub native_udfs: Vec<NativeUdfMeta>,
+    pub external_udfs: Vec<ExternalUdfMeta>,
 }
 
 impl ExprSchema {
@@ -49,8 +49,8 @@ impl ExprSchema {
         self.event_fields.iter().find(|f| f.name == name).map(|f| &f.value_type)
     }
 
-    pub fn lookup_native_udf(&self, name: &str) -> Option<&NativeUdfMeta> {
-        self.native_udfs.iter().find(|u| u.name == name)
+    pub fn lookup_external_udf(&self, name: &str) -> Option<&ExternalUdfMeta> {
+        self.external_udfs.iter().find(|u| u.name == name)
     }
 }
 
@@ -325,21 +325,21 @@ impl TypeChecker {
                 Ok((LogExpr::RaiseError { operand: Box::new(operand) }, ValueType::Null))
             }
 
-            LogExpr::CelUdf { source, args } => {
+            LogExpr::CelFallback { source, args } => {
                 let checked_args: Vec<Box<LogExpr>> = args.iter()
                     .map(|a| self.check(a).map(|(e, _)| Box::new(e)))
                     .collect::<Result<_, _>>()?;
-                Ok((LogExpr::CelUdf { source: source.clone(), args: checked_args }, ValueType::Null))
+                Ok((LogExpr::CelFallback { source: source.clone(), args: checked_args }, ValueType::Null))
             }
 
-            LogExpr::NativeCall { function_id, args } => {
+            LogExpr::ExternalCall { function_id, args } => {
                 let checked_args: Vec<Box<LogExpr>> = args.iter()
                     .map(|a| self.check(a).map(|(e, _)| Box::new(e)))
                     .collect::<Result<_, _>>()?;
-                let return_type = self.schema.lookup_native_udf(function_id)
+                let return_type = self.schema.lookup_external_udf(function_id)
                     .map(|m| m.return_type.clone())
                     .unwrap_or(ValueType::Null);
-                Ok((LogExpr::NativeCall {
+                Ok((LogExpr::ExternalCall {
                     function_id: function_id.clone(),
                     args: checked_args,
                 }, return_type))
@@ -605,7 +605,7 @@ mod tests {
                 })
                 .collect(),
             enrichment_fields: vec![],
-            native_udfs: vec![],
+            external_udfs: vec![],
         }
     }
 
@@ -826,7 +826,7 @@ mod tests {
                 },
             ],
             enrichment_fields: vec![],
-            native_udfs: vec![],
+            external_udfs: vec![],
         }
     }
 

@@ -2,7 +2,7 @@
 //!
 //! Parses CEL source into the `cel_parser` AST, then walks it to produce
 //! a `LogExpr` tree. Functions and operators that appear in the function
-//! catalog become native IR nodes; unrecognized constructs become `CelUdf`
+//! catalog become physical IR nodes; unrecognized constructs become `CelFallback`
 //! leaves that the evaluator delegates to the CEL runtime.
 //!
 //! The translator always succeeds if the CEL parses — there are no
@@ -49,12 +49,12 @@ pub fn cel_to_log_expr(source: &str) -> Result<CelTranslation, CelConvertError> 
     cel_to_log_expr_with_udfs(source, &[])
 }
 
-pub fn cel_to_log_expr_with_udfs(source: &str, native_udf_names: &[&str]) -> Result<CelTranslation, CelConvertError> {
+pub fn cel_to_log_expr_with_udfs(source: &str, external_udf_names: &[&str]) -> Result<CelTranslation, CelConvertError> {
     let ast = cel_parser::parse(source).map_err(CelConvertError::Parse)?;
     let has_udf = Cell::new(false);
-    let native_names: HashSet<&str> = native_udf_names.iter().copied().collect();
-    let expr = convert_with_udfs(&ast, &has_udf, &native_names)?;
-    let is_root_udf = matches!(&expr, LogExpr::CelUdf { .. });
+    let external_names: HashSet<&str> = external_udf_names.iter().copied().collect();
+    let expr = convert_with_udfs(&ast, &has_udf, &external_names)?;
+    let is_root_udf = matches!(&expr, LogExpr::CelFallback { .. });
     let status = if !has_udf.get() {
         TranslationStatus::FullyRaised
     } else if is_root_udf {
@@ -69,31 +69,31 @@ fn convert(expr: &Expression, has_udf: &Cell<bool>) -> Result<LogExpr, CelConver
     convert_with_udfs(expr, has_udf, &HashSet::new())
 }
 
-fn convert_with_udfs(expr: &Expression, has_udf: &Cell<bool>, native_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
+fn convert_with_udfs(expr: &Expression, has_udf: &Cell<bool>, external_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
     match expr {
         Expression::Atom(atom) => Ok(convert_atom(atom)),
         Expression::Ident(name) => Ok(LogExpr::GetFieldByName { field_name: name.to_string() }),
 
         Expression::Or(lhs, rhs) => Ok(LogExpr::LogicalOr {
-            lhs: boxed(convert_with_udfs(lhs, has_udf, native_names)?),
-            rhs: boxed(convert_with_udfs(rhs, has_udf, native_names)?),
+            lhs: boxed(convert_with_udfs(lhs, has_udf, external_names)?),
+            rhs: boxed(convert_with_udfs(rhs, has_udf, external_names)?),
         }),
         Expression::And(lhs, rhs) => Ok(LogExpr::LogicalAnd {
-            lhs: boxed(convert_with_udfs(lhs, has_udf, native_names)?),
-            rhs: boxed(convert_with_udfs(rhs, has_udf, native_names)?),
+            lhs: boxed(convert_with_udfs(lhs, has_udf, external_names)?),
+            rhs: boxed(convert_with_udfs(rhs, has_udf, external_names)?),
         }),
-        Expression::Unary(op, operand) => convert_unary(op, operand, has_udf, native_names),
-        Expression::Relation(lhs, op, rhs) => convert_relation(lhs, op, rhs, has_udf, native_names),
-        Expression::Arithmetic(lhs, op, rhs) => convert_arithmetic(lhs, op, rhs, has_udf, native_names),
+        Expression::Unary(op, operand) => convert_unary(op, operand, has_udf, external_names),
+        Expression::Relation(lhs, op, rhs) => convert_relation(lhs, op, rhs, has_udf, external_names),
+        Expression::Arithmetic(lhs, op, rhs) => convert_arithmetic(lhs, op, rhs, has_udf, external_names),
         Expression::Ternary(cond, then_expr, else_expr) => Ok(LogExpr::Conditional {
-            condition: boxed(convert_with_udfs(cond, has_udf, native_names)?),
-            then_expr: boxed(convert_with_udfs(then_expr, has_udf, native_names)?),
-            else_expr: boxed(convert_with_udfs(else_expr, has_udf, native_names)?),
+            condition: boxed(convert_with_udfs(cond, has_udf, external_names)?),
+            then_expr: boxed(convert_with_udfs(then_expr, has_udf, external_names)?),
+            else_expr: boxed(convert_with_udfs(else_expr, has_udf, external_names)?),
         }),
 
-        Expression::Member(base, member) => convert_member(base, member, has_udf, native_names),
+        Expression::Member(base, member) => convert_member(base, member, has_udf, external_names),
         Expression::FunctionCall(name_expr, target, args) =>
-            convert_function_call(name_expr, target, args, has_udf, native_names),
+            convert_function_call(name_expr, target, args, has_udf, external_names),
 
         Expression::List(items) => {
             let values: Result<Vec<Value>, ()> = items.iter().map(convert_to_literal_value).collect();
@@ -113,7 +113,7 @@ fn make_udf(expr: &Expression, has_udf: &Cell<bool>) -> LogExpr {
     let args: Vec<Box<LogExpr>> = refs.variables().into_iter()
         .map(|v| Box::new(LogExpr::GetFieldByName { field_name: v.to_string() }))
         .collect();
-    LogExpr::CelUdf {
+    LogExpr::CelFallback {
         source: format_cel(expr),
         args,
     }
@@ -150,8 +150,8 @@ fn convert_to_literal_value(expr: &Expression) -> Result<Value, ()> {
     }
 }
 
-fn convert_unary(op: &UnaryOp, operand: &Expression, has_udf: &Cell<bool>, native_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
-    let inner = convert_with_udfs(operand, has_udf, native_names)?;
+fn convert_unary(op: &UnaryOp, operand: &Expression, has_udf: &Cell<bool>, external_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
+    let inner = convert_with_udfs(operand, has_udf, external_names)?;
     match op {
         UnaryOp::Not => Ok(LogExpr::LogicalNot { operand: boxed(inner) }),
         UnaryOp::DoubleNot => Ok(LogExpr::LogicalNot {
@@ -164,9 +164,9 @@ fn convert_unary(op: &UnaryOp, operand: &Expression, has_udf: &Cell<bool>, nativ
     }
 }
 
-fn convert_relation(lhs: &Expression, op: &RelationOp, rhs: &Expression, has_udf: &Cell<bool>, native_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
-    let l = boxed(convert_with_udfs(lhs, has_udf, native_names)?);
-    let r = boxed(convert_with_udfs(rhs, has_udf, native_names)?);
+fn convert_relation(lhs: &Expression, op: &RelationOp, rhs: &Expression, has_udf: &Cell<bool>, external_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
+    let l = boxed(convert_with_udfs(lhs, has_udf, external_names)?);
+    let r = boxed(convert_with_udfs(rhs, has_udf, external_names)?);
     Ok(match op {
         RelationOp::Equals => LogExpr::Equal { lhs: l, rhs: r },
         RelationOp::NotEquals => LogExpr::NotEqual { lhs: l, rhs: r },
@@ -178,9 +178,9 @@ fn convert_relation(lhs: &Expression, op: &RelationOp, rhs: &Expression, has_udf
     })
 }
 
-fn convert_arithmetic(lhs: &Expression, op: &ArithmeticOp, rhs: &Expression, has_udf: &Cell<bool>, native_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
-    let l = boxed(convert_with_udfs(lhs, has_udf, native_names)?);
-    let r = boxed(convert_with_udfs(rhs, has_udf, native_names)?);
+fn convert_arithmetic(lhs: &Expression, op: &ArithmeticOp, rhs: &Expression, has_udf: &Cell<bool>, external_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
+    let l = boxed(convert_with_udfs(lhs, has_udf, external_names)?);
+    let r = boxed(convert_with_udfs(rhs, has_udf, external_names)?);
     Ok(match op {
         ArithmeticOp::Add => LogExpr::Add { lhs: l, rhs: r },
         ArithmeticOp::Subtract => LogExpr::Subtract { lhs: l, rhs: r },
@@ -190,18 +190,18 @@ fn convert_arithmetic(lhs: &Expression, op: &ArithmeticOp, rhs: &Expression, has
     })
 }
 
-fn convert_member(base: &Expression, member: &Member, has_udf: &Cell<bool>, native_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
+fn convert_member(base: &Expression, member: &Member, has_udf: &Cell<bool>, external_names: &HashSet<&str>) -> Result<LogExpr, CelConvertError> {
     match member {
         Member::Attribute(name) => {
-            let parent = convert_with_udfs(base, has_udf, native_names)?;
+            let parent = convert_with_udfs(base, has_udf, external_names)?;
             Ok(LogExpr::GetChildByName {
                 child_name: name.to_string(),
                 operand: boxed(parent),
             })
         }
         Member::Index(idx_expr) => {
-            let parent = convert_with_udfs(base, has_udf, native_names)?;
-            let idx = convert_with_udfs(idx_expr, has_udf, native_names)?;
+            let parent = convert_with_udfs(base, has_udf, external_names)?;
+            let idx = convert_with_udfs(idx_expr, has_udf, external_names)?;
             Ok(LogExpr::Index { lhs: boxed(parent), rhs: boxed(idx) })
         }
         Member::Fields(_) => Ok(make_udf(base, has_udf)),
@@ -213,7 +213,7 @@ fn convert_function_call(
     target: &Option<Box<Expression>>,
     args: &[Expression],
     has_udf: &Cell<bool>,
-    native_names: &HashSet<&str>,
+    external_names: &HashSet<&str>,
 ) -> Result<LogExpr, CelConvertError> {
     let name = match name_expr {
         Expression::Ident(n) => n.as_str(),
@@ -234,8 +234,8 @@ fn convert_function_call(
     );
 
     match target {
-        None => convert_free_function(name, args, has_udf, &full_expr, native_names),
-        Some(receiver) => convert_method_call(name, receiver, args, has_udf, &full_expr, native_names),
+        None => convert_free_function(name, args, has_udf, &full_expr, external_names),
+        Some(receiver) => convert_method_call(name, receiver, args, has_udf, &full_expr, external_names),
     }
 }
 
@@ -244,85 +244,100 @@ fn convert_free_function(
     args: &[Expression],
     has_udf: &Cell<bool>,
     full_expr: &Expression,
-    native_names: &HashSet<&str>,
+    external_names: &HashSet<&str>,
 ) -> Result<LogExpr, CelConvertError> {
     match name {
         "size" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::Size { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::Size { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "bool" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::CastBool { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::CastBool { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "int" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::CastInt { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::CastInt { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "uint" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::CastUint { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::CastUint { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "double" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::CastDouble { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::CastDouble { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "string" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::CastString { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::CastString { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "bytes" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::CastBytes { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::CastBytes { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "duration" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::CastDuration { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::CastDuration { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "timestamp" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::CastTimestamp { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::CastTimestamp { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "type" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::TypeOf { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::TypeOf { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "dyn" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::Dyn { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::Dyn { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "has" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::Has { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::Has { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "cidr_contains" => {
             expect_args(name, 2, args)?;
             Ok(LogExpr::CidrContains {
-                lhs: boxed(convert_with_udfs(&args[0], has_udf, native_names)?),
-                rhs: boxed(convert_with_udfs(&args[1], has_udf, native_names)?),
+                lhs: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
+                rhs: boxed(convert_with_udfs(&args[1], has_udf, external_names)?),
             })
         }
         "cidr_match" => {
             expect_args(name, 2, args)?;
             Ok(LogExpr::CidrMatch {
-                lhs: boxed(convert_with_udfs(&args[0], has_udf, native_names)?),
-                rhs: boxed(convert_with_udfs(&args[1], has_udf, native_names)?),
+                lhs: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
+                rhs: boxed(convert_with_udfs(&args[1], has_udf, external_names)?),
             })
         }
         "ip_to_int" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::IpToInt { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::IpToInt { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
         }
         "int_to_ip" => {
             expect_args(name, 1, args)?;
-            Ok(LogExpr::IntToIp { operand: boxed(convert_with_udfs(&args[0], has_udf, native_names)?) })
+            Ok(LogExpr::IntToIp { operand: boxed(convert_with_udfs(&args[0], has_udf, external_names)?) })
+        }
+        "regex_extract" => {
+            expect_args(name, 2, args)?;
+            Ok(LogExpr::RegexExtract {
+                lhs: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
+                rhs: boxed(convert_with_udfs(&args[1], has_udf, external_names)?),
+            })
+        }
+        "regex_replace" => {
+            expect_args(name, 3, args)?;
+            Ok(LogExpr::RegexReplace {
+                arg0: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
+                arg1: boxed(convert_with_udfs(&args[1], has_udf, external_names)?),
+                arg2: boxed(convert_with_udfs(&args[2], has_udf, external_names)?),
+            })
         }
         _ => {
-            if native_names.contains(name) {
+            if external_names.contains(name) {
                 let converted_args: Vec<Box<LogExpr>> = args.iter()
-                    .map(|a| Ok(Box::new(convert_with_udfs(a, has_udf, native_names)?)))
+                    .map(|a| Ok(Box::new(convert_with_udfs(a, has_udf, external_names)?)))
                     .collect::<Result<_, CelConvertError>>()?;
-                Ok(LogExpr::NativeCall {
+                Ok(LogExpr::ExternalCall {
                     function_id: name.to_string(),
                     args: converted_args,
                 })
@@ -339,43 +354,43 @@ fn convert_method_call(
     args: &[Expression],
     has_udf: &Cell<bool>,
     full_expr: &Expression,
-    native_names: &HashSet<&str>,
+    external_names: &HashSet<&str>,
 ) -> Result<LogExpr, CelConvertError> {
     match name {
         "contains" => {
             expect_args(name, 1, args)?;
             Ok(LogExpr::Contains {
-                receiver: boxed(convert_with_udfs(receiver, has_udf, native_names)?),
-                arg: boxed(convert_with_udfs(&args[0], has_udf, native_names)?),
+                receiver: boxed(convert_with_udfs(receiver, has_udf, external_names)?),
+                arg: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
             })
         }
         "startsWith" => {
             expect_args(name, 1, args)?;
             Ok(LogExpr::StartsWith {
-                receiver: boxed(convert_with_udfs(receiver, has_udf, native_names)?),
-                arg: boxed(convert_with_udfs(&args[0], has_udf, native_names)?),
+                receiver: boxed(convert_with_udfs(receiver, has_udf, external_names)?),
+                arg: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
             })
         }
         "endsWith" => {
             expect_args(name, 1, args)?;
             Ok(LogExpr::EndsWith {
-                receiver: boxed(convert_with_udfs(receiver, has_udf, native_names)?),
-                arg: boxed(convert_with_udfs(&args[0], has_udf, native_names)?),
+                receiver: boxed(convert_with_udfs(receiver, has_udf, external_names)?),
+                arg: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
             })
         }
         "matches" => {
             expect_args(name, 1, args)?;
             Ok(LogExpr::RegexMatch {
-                receiver: boxed(convert_with_udfs(receiver, has_udf, native_names)?),
-                arg: boxed(convert_with_udfs(&args[0], has_udf, native_names)?),
+                receiver: boxed(convert_with_udfs(receiver, has_udf, external_names)?),
+                arg: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
             })
         }
         "size" => {
             expect_args(name, 0, args)?;
-            Ok(LogExpr::Size { operand: boxed(convert_with_udfs(receiver, has_udf, native_names)?) })
+            Ok(LogExpr::Size { operand: boxed(convert_with_udfs(receiver, has_udf, external_names)?) })
         }
         "all" | "exists" | "exists_one" | "filter" | "map" => {
-            convert_hof(name, receiver, args, has_udf, native_names)
+            convert_hof(name, receiver, args, has_udf, external_names)
         }
         _ => Ok(make_udf(full_expr, has_udf)),
     }
@@ -386,10 +401,10 @@ fn convert_hof(
     receiver: &Expression,
     args: &[Expression],
     has_udf: &Cell<bool>,
-    native_names: &HashSet<&str>,
+    external_names: &HashSet<&str>,
 ) -> Result<LogExpr, CelConvertError> {
     expect_args(name, 2, args)?;
-    let collection = boxed(convert_with_udfs(receiver, has_udf, native_names)?);
+    let collection = boxed(convert_with_udfs(receiver, has_udf, external_names)?);
 
     let binding = match &args[0] {
         Expression::Ident(s) => s.to_string(),
@@ -400,7 +415,7 @@ fn convert_hof(
         }),
     };
 
-    let body = boxed(convert_with_udfs(&args[1], has_udf, native_names)?);
+    let body = boxed(convert_with_udfs(&args[1], has_udf, external_names)?);
 
     Ok(match name {
         "all" => LogExpr::All { collection, binding, body },
@@ -429,7 +444,7 @@ fn boxed(expr: LogExpr) -> Box<LogExpr> {
 
 // --- Minimal CEL formatter ---
 // Reconstructs recognizable CEL text from a parsed AST.
-// Not a full round-trip printer — just enough for debugging CelUdf source fields.
+// Not a full round-trip printer — just enough for debugging CelFallback source fields.
 
 fn format_cel(expr: &Expression) -> String {
     match expr {
@@ -556,7 +571,7 @@ mod tests {
     }
 
     /// Relational operators map to the corresponding LogExpr variant.
-    /// The whole expression is fully raised (no CelUdf nodes).
+    /// The whole expression is fully raised (no CelFallback nodes).
     #[test]
     fn simple_comparison() {
         let t = cel_to_log_expr("age > 18").unwrap();
@@ -703,7 +718,7 @@ mod tests {
         assert_eq!(t.status, TranslationStatus::FullyRaised);
     }
 
-    /// A function not in our catalog becomes an opaque CelUdf node.
+    /// A function not in our catalog becomes an opaque CelFallback node.
     /// The source text is reconstructed from the AST for debugging.
     /// The args are the variable references the CEL runtime will need.
     #[test]
@@ -711,17 +726,17 @@ mod tests {
         let t = cel_to_log_expr("frobnicate(x, y)").unwrap();
         assert_eq!(t.status, TranslationStatus::Opaque);
         match &t.expr {
-            LogExpr::CelUdf { source, args } => {
+            LogExpr::CelFallback { source, args } => {
                 assert!(source.contains("frobnicate"));
                 assert_eq!(args.len(), 2);
             }
-            other => panic!("expected CelUdf, got {other:?}"),
+            other => panic!("expected CelFallback, got {other:?}"),
         }
     }
 
     /// The key partial-raising test: one side of an && is fully raised
     /// (age >= 18 → GreaterOrEqual), the other side is an unknown
-    /// function that becomes a CelUdf leaf. The conjunction itself is
+    /// function that becomes a CelFallback leaf. The conjunction itself is
     /// native IR, so the optimizer can still reason about short-circuit
     /// ordering — e.g. put the cheap field comparison first.
     #[test]
@@ -731,14 +746,14 @@ mod tests {
         match &t.expr {
             LogExpr::LogicalAnd { lhs, rhs } => {
                 assert!(matches!(lhs.as_ref(), LogExpr::GreaterOrEqual { .. }));
-                assert!(matches!(rhs.as_ref(), LogExpr::CelUdf { .. }));
+                assert!(matches!(rhs.as_ref(), LogExpr::CelFallback { .. }));
             }
             other => panic!("expected LogicalAnd, got {other:?}"),
         }
     }
 
     /// When every part of the expression maps to a catalog function,
-    /// the status is FullyRaised — no CelUdf nodes anywhere in the tree.
+    /// the status is FullyRaised — no CelFallback nodes anywhere in the tree.
     #[test]
     fn fully_raised_has_no_udfs() {
         let t = cel_to_log_expr("size(name) > 0").unwrap();
@@ -758,12 +773,12 @@ mod tests {
     }
 
     /// A method call we don't recognize (toUpperCase is not in our
-    /// catalog) becomes an opaque CelUdf. The CEL runtime handles it.
+    /// catalog) becomes an opaque CelFallback. The CEL runtime handles it.
     #[test]
     fn unknown_method_becomes_udf() {
         let t = cel_to_log_expr("name.toUpperCase()").unwrap();
         assert_eq!(t.status, TranslationStatus::Opaque);
-        assert!(matches!(t.expr, LogExpr::CelUdf { .. }));
+        assert!(matches!(t.expr, LogExpr::CelFallback { .. }));
     }
 
     /// Verify that `_` is a valid CEL identifier, so `_.enrichments.foo`
@@ -807,9 +822,9 @@ mod tests {
         assert!(!c.reads_current_time());
     }
 
-    /// A CelUdf node conservatively assumes all coeffects -- we don't
+    /// A CelFallback node conservatively assumes all coeffects -- we don't
     /// know what the opaque CEL function does, so we assume the worst.
-    /// One CelUdf anywhere in the tree poisons the whole expression.
+    /// One CelFallback anywhere in the tree poisons the whole expression.
     #[test]
     fn coeffects_udf_is_conservative() {
         use crate::expr_gen::transitive_coeffects;

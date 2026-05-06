@@ -301,14 +301,14 @@ fn emit_logical_ir(
     }
 
     writeln!(out).unwrap();
-    writeln!(out, "    /// Opaque CEL sub-expression that could not be raised to a native IR node.").unwrap();
+    writeln!(out, "    /// Opaque CEL sub-expression that could not be raised to a physical IR node.").unwrap();
     writeln!(out, "    /// The `source` field is the reconstructed CEL text, kept for informational/").unwrap();
     writeln!(out, "    /// debugging purposes ONLY — it must NEVER be re-parsed for execution.").unwrap();
     writeln!(out, "    /// The authoritative representation is the compiled program in the side table.").unwrap();
-    writeln!(out, "    CelUdf {{ source: String, args: Vec<Box<LogExpr>> }},").unwrap();
+    writeln!(out, "    CelFallback {{ source: String, args: Vec<Box<LogExpr>> }},").unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "    /// Dispatch to a registered native UDF by function_id.").unwrap();
-    writeln!(out, "    NativeCall {{ function_id: String, args: Vec<Box<LogExpr>> }},").unwrap();
+    writeln!(out, "    /// Dispatch to a registered external UDF by function_id.").unwrap();
+    writeln!(out, "    ExternalCall {{ function_id: String, args: Vec<Box<LogExpr>> }},").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "    /// Multi-way conditional (desugared CASE).").unwrap();
     writeln!(out, "    Case {{ arms: Vec<(Box<LogExpr>, Box<LogExpr>)>, default: Box<LogExpr> }},").unwrap();
@@ -332,10 +332,10 @@ fn emit_intrinsic_coeffects(
     writeln!(out, "        match self {{").unwrap();
 
     writeln!(out, "            Self::GetFieldByName {{ .. }} | Self::GetFieldByIndex {{ .. }} => CoeffectSet::event_data(),").unwrap();
-    writeln!(out, "            Self::CelUdf {{ .. }} => CoeffectSet::all(),").unwrap();
-    writeln!(out, "            Self::NativeCall {{ .. }} => {{").unwrap();
+    writeln!(out, "            Self::CelFallback {{ .. }} => CoeffectSet::all(),").unwrap();
+    writeln!(out, "            Self::ExternalCall {{ .. }} => {{").unwrap();
     writeln!(out, "                let mut s = CoeffectSet::new();").unwrap();
-    writeln!(out, "                s.insert(crate::coeffects::Coeffect::CallsNativeUdf);").unwrap();
+    writeln!(out, "                s.insert(crate::coeffects::Coeffect::CallsExternalUdf(crate::coeffects::UdfLanguage::Opaque));").unwrap();
     writeln!(out, "                s").unwrap();
     writeln!(out, "            }},").unwrap();
 
@@ -430,6 +430,7 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "        | LogExpr::Index {{ lhs, rhs }} | LogExpr::In {{ lhs, rhs }}").unwrap();
     writeln!(out, "        | LogExpr::JsonExtract {{ lhs, rhs }} | LogExpr::JsonExtractString {{ lhs, rhs }}").unwrap();
     writeln!(out, "        | LogExpr::CidrContains {{ lhs, rhs }} | LogExpr::CidrMatch {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::RegexExtract {{ lhs, rhs }}").unwrap();
     writeln!(out, "        => {{").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(lhs));").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(rhs));").unwrap();
@@ -445,7 +446,7 @@ fn emit_transitive_coeffects(out: &mut String) {
 
     // Ternary
     writeln!(out, "        LogExpr::Between {{ arg0, arg1, arg2 }} | LogExpr::Substring {{ arg0, arg1, arg2 }}").unwrap();
-    writeln!(out, "        | LogExpr::Replace {{ arg0, arg1, arg2 }}").unwrap();
+    writeln!(out, "        | LogExpr::Replace {{ arg0, arg1, arg2 }} | LogExpr::RegexReplace {{ arg0, arg1, arg2 }}").unwrap();
     writeln!(out, "        => {{").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(arg0));").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(arg1));").unwrap();
@@ -476,8 +477,8 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "            result = result.union(transitive_coeffects(body));").unwrap();
     writeln!(out, "        }},").unwrap();
 
-    // CelUdf / NativeCall: args
-    writeln!(out, "        LogExpr::CelUdf {{ args, .. }} | LogExpr::NativeCall {{ args, .. }} => {{").unwrap();
+    // CelFallback / ExternalCall: args
+    writeln!(out, "        LogExpr::CelFallback {{ args, .. }} | LogExpr::ExternalCall {{ args, .. }} => {{").unwrap();
     writeln!(out, "            for arg in args {{").unwrap();
     writeln!(out, "                result = result.union(transitive_coeffects(arg));").unwrap();
     writeln!(out, "            }}").unwrap();

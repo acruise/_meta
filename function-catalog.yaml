@@ -488,11 +488,41 @@
   internal: RegexMatch
   cel: matches
   substrait: { ext: functions_string, name: regexp_match_substring }
-  status: partial
-  notes: CEL returns bool; Substrait returns the matched substring
+  status: mapped
+  notes: >
+    CEL returns bool; Substrait returns the matched substring.
+    Pattern is compiled once if the argument is a literal string;
+    non-literal patterns work but recompile on every evaluation.
   receiver: string
   params: [string]
   return: bool
+
+- id: regex_extract
+  internal: RegexExtract
+  cel: regex_extract
+  status: mapped
+  notes: >
+    Returns the first capture group of the pattern, or null if no match.
+    If the pattern has no capture group, returns the entire match.
+    Pattern is compiled once if the argument is a literal string;
+    non-literal patterns work but recompile on every evaluation.
+  params: [string, string]
+  return: string
+  null_semantics: propagate
+
+- id: regex_replace
+  internal: RegexReplace
+  cel: regex_replace
+  status: mapped
+  notes: >
+    Replaces all non-overlapping matches of pattern in the input
+    with the replacement string. Capture group back-references
+    ($1, $2, etc.) are supported in the replacement.
+    Pattern is compiled once if the argument is a literal string;
+    non-literal patterns work but recompile on every evaluation.
+  params: [string, string, string]
+  return: string
+  null_semantics: propagate
 
 - id: size
   internal: Size

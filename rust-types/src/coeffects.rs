@@ -22,13 +22,24 @@ pub enum Coeffect {
     /// Reads enrichment data. Possibly IO-heavy on cache miss;
     /// the enrichment cache may need warming before evaluation.
     ReadsEnrichment,
-    /// Calls a native UDF -- arbitrary Rust code behind a proto
-    /// boundary. This is the first place Turing-complete user code
-    /// enters the expression system. The UDF may be pure in practice,
-    /// but we cannot verify that, so this coeffect prevents
-    /// is_foldable() from treating NativeCall subtrees as constants
-    /// and blocks any optimization that assumes determinism.
-    CallsNativeUdf,
+    /// Calls an external UDF. The language determines the trust level:
+    /// opaque languages (Rust, Starlark) may have arbitrary side effects,
+    /// while sandboxed languages (CEL) are safe but slow.
+    CallsExternalUdf(UdfLanguage),
+}
+
+/// What language an external UDF is implemented in. Determines the
+/// trust/optimization level: opaque languages block constant folding
+/// and assume worst-case side effects; sandboxed languages are merely
+/// expensive to evaluate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UdfLanguage {
+    /// Arbitrary native code (Rust, C FFI). Cannot verify purity.
+    Opaque,
+    /// CEL expression body. Safe (no IO, no mutation) but slow.
+    Cel,
+    /// WebAssembly module. Sandboxed and fast.
+    Wasm,
 }
 
 /// A set of coeffects. Wraps a `HashSet<Coeffect>` with convenience

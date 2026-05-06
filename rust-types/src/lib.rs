@@ -1,7 +1,7 @@
 pub mod value;
 pub mod coeffects;
 pub mod effects;
-pub mod native_fn;
+pub mod external_fn;
 
 #[cfg(feature = "yaml-catalog")]
 pub mod udf_catalog;

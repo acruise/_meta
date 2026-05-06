@@ -1,7 +1,7 @@
 pub use meta_types::value;
 pub use meta_types::coeffects;
 pub use meta_types::effects;
-pub use meta_types::native_fn;
+pub use meta_types::external_fn;
 pub use meta_types::cluonflux;
 
 pub mod codegen;

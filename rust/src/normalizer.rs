@@ -208,6 +208,8 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
         LogExpr::StartsWith { receiver, arg } => LogExpr::StartsWith { receiver: n(receiver), arg: n(arg) },
         LogExpr::EndsWith { receiver, arg } => LogExpr::EndsWith { receiver: n(receiver), arg: n(arg) },
         LogExpr::RegexMatch { receiver, arg } => LogExpr::RegexMatch { receiver: n(receiver), arg: n(arg) },
+        LogExpr::RegexExtract { lhs, rhs } => LogExpr::RegexExtract { lhs: n(lhs), rhs: n(rhs) },
+        LogExpr::RegexReplace { arg0, arg1, arg2 } => LogExpr::RegexReplace { arg0: n(arg0), arg1: n(arg1), arg2: n(arg2) },
 
         // Ternary
         LogExpr::Between { arg0, arg1, arg2 } => LogExpr::Between { arg0: n(arg0), arg1: n(arg1), arg2: n(arg2) },
@@ -233,13 +235,13 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
         LogExpr::Filter { collection, binding, body } => LogExpr::Filter { collection: n(collection), binding: binding.clone(), body: n(body) },
         LogExpr::MapTransform { collection, binding, body } => LogExpr::MapTransform { collection: n(collection), binding: binding.clone(), body: n(body) },
 
-        // CelUdf
-        LogExpr::CelUdf { source, args } => LogExpr::CelUdf {
+        // CelFallback
+        LogExpr::CelFallback { source, args } => LogExpr::CelFallback {
             source: source.clone(),
             args: args.iter().map(|a| Box::new(normalize(a))).collect(),
         },
 
-        LogExpr::NativeCall { function_id, args } => LogExpr::NativeCall {
+        LogExpr::ExternalCall { function_id, args } => LogExpr::ExternalCall {
             function_id: function_id.clone(),
             args: args.iter().map(|a| Box::new(normalize(a))).collect(),
         },

@@ -80,8 +80,12 @@ pub enum LogExpr {
     Contains { receiver: Box<LogExpr>, arg: Box<LogExpr> },
     StartsWith { receiver: Box<LogExpr>, arg: Box<LogExpr> },
     EndsWith { receiver: Box<LogExpr>, arg: Box<LogExpr> },
-    /// CEL returns bool; Substrait returns the matched substring
+    /// CEL returns bool; Substrait returns the matched substring. Pattern is compiled once if the argument is a literal string; non-literal patterns work but recompile on every evaluation.
     RegexMatch { receiver: Box<LogExpr>, arg: Box<LogExpr> },
+    /// Returns the first capture group of the pattern, or null if no match. If the pattern has no capture group, returns the entire match. Pattern is compiled once if the argument is a literal string; non-literal patterns work but recompile on every evaluation.
+    RegexExtract { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// Replaces all non-overlapping matches of pattern in the input with the replacement string. Capture group back-references ($1, $2, etc.) are supported in the replacement. Pattern is compiled once if the argument is a literal string; non-literal patterns work but recompile on every evaluation.
+    RegexReplace { arg0: Box<LogExpr>, arg1: Box<LogExpr>, arg2: Box<LogExpr> },
     /// also maps to Substrait octet_length for bytes, and list/map cardinality
     Size { operand: Box<LogExpr> },
     Lower { operand: Box<LogExpr> },
@@ -150,14 +154,14 @@ pub enum LogExpr {
     Filter { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
     MapTransform { collection: Box<LogExpr>, binding: String, body: Box<LogExpr> },
 
-    /// Opaque CEL sub-expression that could not be raised to a native IR node.
+    /// Opaque CEL sub-expression that could not be raised to a physical IR node.
     /// The `source` field is the reconstructed CEL text, kept for informational/
     /// debugging purposes ONLY — it must NEVER be re-parsed for execution.
     /// The authoritative representation is the compiled program in the side table.
-    CelUdf { source: String, args: Vec<Box<LogExpr>> },
+    CelFallback { source: String, args: Vec<Box<LogExpr>> },
 
-    /// Dispatch to a registered native UDF by function_id.
-    NativeCall { function_id: String, args: Vec<Box<LogExpr>> },
+    /// Dispatch to a registered external UDF by function_id.
+    ExternalCall { function_id: String, args: Vec<Box<LogExpr>> },
 
     /// Multi-way conditional (desugared CASE).
     Case { arms: Vec<(Box<LogExpr>, Box<LogExpr>)>, default: Box<LogExpr> },
@@ -169,10 +173,10 @@ impl LogExpr {
         use crate::coeffects::CoeffectSet;
         match self {
             Self::GetFieldByName { .. } | Self::GetFieldByIndex { .. } => CoeffectSet::event_data(),
-            Self::CelUdf { .. } => CoeffectSet::all(),
-            Self::NativeCall { .. } => {
+            Self::CelFallback { .. } => CoeffectSet::all(),
+            Self::ExternalCall { .. } => {
                 let mut s = CoeffectSet::new();
-                s.insert(crate::coeffects::Coeffect::CallsNativeUdf);
+                s.insert(crate::coeffects::Coeffect::CallsExternalUdf(crate::coeffects::UdfLanguage::Opaque));
                 s
             },
             Self::CurrentTimestamp { .. } => CoeffectSet::current_time(0),
@@ -230,6 +234,7 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
         | LogExpr::Index { lhs, rhs } | LogExpr::In { lhs, rhs }
         | LogExpr::JsonExtract { lhs, rhs } | LogExpr::JsonExtractString { lhs, rhs }
         | LogExpr::CidrContains { lhs, rhs } | LogExpr::CidrMatch { lhs, rhs }
+        | LogExpr::RegexExtract { lhs, rhs }
         => {
             result = result.union(transitive_coeffects(lhs));
             result = result.union(transitive_coeffects(rhs));
@@ -241,7 +246,7 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
             result = result.union(transitive_coeffects(arg));
         },
         LogExpr::Between { arg0, arg1, arg2 } | LogExpr::Substring { arg0, arg1, arg2 }
-        | LogExpr::Replace { arg0, arg1, arg2 }
+        | LogExpr::Replace { arg0, arg1, arg2 } | LogExpr::RegexReplace { arg0, arg1, arg2 }
         => {
             result = result.union(transitive_coeffects(arg0));
             result = result.union(transitive_coeffects(arg1));
@@ -266,7 +271,7 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
             result = result.union(transitive_coeffects(collection));
             result = result.union(transitive_coeffects(body));
         },
-        LogExpr::CelUdf { args, .. } | LogExpr::NativeCall { args, .. } => {
+        LogExpr::CelFallback { args, .. } | LogExpr::ExternalCall { args, .. } => {
             for arg in args {
                 result = result.union(transitive_coeffects(arg));
             }
@@ -292,4 +297,3 @@ impl LogExpr {
         transitive_coeffects(self).is_pure()
     }
 }
-
