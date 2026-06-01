@@ -78,6 +78,10 @@ cargo run -q -p <consumer>-codegen -- _meta/function-catalog.yaml meta/<consumer
 
 Because `_meta` is a submodule, a change here is a change to a contract two projects depend on. A few consequences:
 
-- Editing the catalogs changes the generated IR shape. If `EXPR_GEN_HASH` changes, the hand-written passes (`type_check.rs` and the consumers' evaluators) need review — that is exactly what the compile-time hash assertion is there to force.
+- Editing the catalogs regenerates the IR. `EXPR_GEN_HASH` is a content hash of the whole catalog plus the codegen, not of the emitted enum shape — so it also changes for catalog edits that leave `LogExpr` byte-identical (e.g. tweaking `null_semantics`, `return`/`params` types, `coeffects`). When it changes, the compile-time assertion in `type_check.rs` fails on purpose, forcing a human to re-read that pass against the catalog diff before re-pinning the constant. Treat a re-pin as "I reviewed it," not a reflex.
 - After committing here, bump the submodule pointer in each consuming project to pick up the change.
 - House style (shared across the consuming projects): Markdown with soft wraps (one physical line per paragraph), ASCII only in source comments and notes — no emoji, no unicode box-drawing. Propose design before large changes.
+
+### TODO
+
+- The `EXPR_GEN_HASH` guard in `type_check.rs` currently carries two jobs: catching *structural* catalog changes (variant added/removed/re-fielded) and *semantic-only* changes (shape-identical, metadata moved). The structural half is redundant for any pass that matches `LogExpr` exhaustively — `udf_resolver.rs` already relies on the compiler's non-exhaustive-match error instead. Consider dropping the 8 wildcard arms in `type_check.rs` to make its match exhaustive too; that would offload structural detection to the compiler and leave the hash guard responsible only for the residual semantic-only class, making each "do I actually need to review?" decision sharper when it fires. The guard is per-file by convention — if another pass ever grows semantic coupling to catalog metadata, it needs its own assert; nothing extends type_check's coverage automatically.
