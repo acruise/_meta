@@ -24,7 +24,7 @@ fn main() {
     print!("{}", result.code);
 
     eprintln!(
-        "Generated: {} scalar, {} hof, {} notochord-specific",
+        "Generated: {} scalar, {} hof, {} consumer-specific",
         result.scalar_count,
         result.hof_count,
         result.property_count,

@@ -181,13 +181,13 @@ mod tests {
     fn test_imports() -> Vec<UdfImport> {
         vec![
             UdfImport {
-                namespace: "io.notochord.udf.useragent".into(),
+                namespace: "io.example.udf.useragent".into(),
                 version: "1".into(),
                 cel_name: "ua_parse".into(),
                 alias: None,
             },
             UdfImport {
-                namespace: "io.notochord.udf.url".into(),
+                namespace: "io.example.udf.url".into(),
                 version: "1".into(),
                 cel_name: "url_parse".into(),
                 alias: Some("parse_url".into()),
@@ -205,7 +205,7 @@ mod tests {
         let resolved = resolve(&expr, &imports).unwrap();
         match &resolved {
             LogExpr::ExternalCall { udf, args } => {
-                assert_eq!(udf.namespace, "io.notochord.udf.useragent");
+                assert_eq!(udf.namespace, "io.example.udf.useragent");
                 assert_eq!(udf.version, "1");
                 assert_eq!(udf.cel_name, "ua_parse");
                 assert_eq!(args.len(), 1);
@@ -224,7 +224,7 @@ mod tests {
         let resolved = resolve(&expr, &imports).unwrap();
         match &resolved {
             LogExpr::ExternalCall { udf, .. } => {
-                assert_eq!(udf.namespace, "io.notochord.udf.url");
+                assert_eq!(udf.namespace, "io.example.udf.url");
                 assert_eq!(udf.cel_name, "url_parse");
             }
             other => panic!("expected ExternalCall, got {other:?}"),

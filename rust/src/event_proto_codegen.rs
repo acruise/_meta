@@ -193,9 +193,9 @@ mod tests {
 
     #[test]
     fn proto_generation() {
-        let proto = generate_event_proto(&order_schema(), "OrderEvent", "notochord.event.v1");
+        let proto = generate_event_proto(&order_schema(), "OrderEvent", "example.event.v1");
         assert!(proto.contains("syntax = \"proto3\""));
-        assert!(proto.contains("package notochord.event.v1"));
+        assert!(proto.contains("package example.event.v1"));
         assert!(proto.contains("message OrderEvent {"));
         assert!(proto.contains("sint64 ts = 1;"));
         assert!(proto.contains("sint64 price = 2;"));
@@ -208,7 +208,7 @@ mod tests {
         let proto = generate_stripped_event_proto(
             &order_schema(),
             "StrippedOrderEvent",
-            "notochord.event.v1",
+            "example.event.v1",
             &["ts", "price"],
         );
         assert!(proto.contains("sint64 ts = 1;"));

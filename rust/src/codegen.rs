@@ -227,7 +227,7 @@ fn gen_warning(out: &mut String) {
 fn emit_logical_ir(
     out: &mut String,
     scalars: &[&CatalogEntry],
-    notochord_ops: &[&CatalogEntry],
+    property_ops: &[&CatalogEntry],
     hofs: &[&CatalogEntry],
 ) {
     gen_warning(out);
@@ -264,7 +264,7 @@ fn emit_logical_ir(
     }
 
     writeln!(out).unwrap();
-    for e in notochord_ops {
+    for e in property_ops {
         let name = e.internal.as_ref().unwrap();
         let props = e.properties.as_ref().unwrap();
         let children = e.child_fields();
@@ -319,14 +319,14 @@ fn emit_logical_ir(
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
-    emit_intrinsic_coeffects(out, scalars, notochord_ops, hofs);
+    emit_intrinsic_coeffects(out, scalars, property_ops, hofs);
     emit_transitive_coeffects(out);
 }
 
 fn emit_intrinsic_coeffects(
     out: &mut String,
     scalars: &[&CatalogEntry],
-    notochord_ops: &[&CatalogEntry],
+    property_ops: &[&CatalogEntry],
     hofs: &[&CatalogEntry],
 ) {
     gen_warning(out);
@@ -343,7 +343,7 @@ fn emit_intrinsic_coeffects(
     writeln!(out, "                s").unwrap();
     writeln!(out, "            }},").unwrap();
 
-    for e in scalars.iter().chain(notochord_ops.iter()).chain(hofs.iter()) {
+    for e in scalars.iter().chain(property_ops.iter()).chain(hofs.iter()) {
         if e.coeffects.is_empty() {
             continue;
         }
