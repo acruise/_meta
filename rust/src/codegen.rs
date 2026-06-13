@@ -451,6 +451,7 @@ fn emit_transitive_coeffects(out: &mut String) {
     // Ternary
     writeln!(out, "        LogExpr::Between {{ arg0, arg1, arg2 }} | LogExpr::Substring {{ arg0, arg1, arg2 }}").unwrap();
     writeln!(out, "        | LogExpr::Replace {{ arg0, arg1, arg2 }} | LogExpr::RegexReplace {{ arg0, arg1, arg2 }}").unwrap();
+    writeln!(out, "        | LogExpr::UrlPathSegment {{ arg0, arg1, arg2 }} | LogExpr::UrlQueryParam {{ arg0, arg1, arg2 }}").unwrap();
     writeln!(out, "        => {{").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(arg0));").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(arg1));").unwrap();

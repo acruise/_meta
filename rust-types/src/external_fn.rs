@@ -282,6 +282,42 @@ where
     }
 }
 
+pub struct ExternalFn3<A1, A2, A3, R, F> {
+    pub entry: UdfCatalogEntry,
+    pub func: F,
+    pub _phantom: std::marker::PhantomData<fn(A1, A2, A3) -> R>,
+}
+
+impl<A1, A2, A3, R, F> ExternalFn for ExternalFn3<A1, A2, A3, R, F>
+where
+    A1: ProtoSerde + Send + Sync,
+    A2: ProtoSerde + Send + Sync,
+    A3: ProtoSerde + Send + Sync,
+    R: ProtoSerde + Send + Sync,
+    F: Fn(A1, A2, A3) -> R + Send + Sync,
+{
+    fn catalog_entry(&self) -> &UdfCatalogEntry { &self.entry }
+
+    fn call(&self, args: &[pb::EncodedValue]) -> pb::EncodedValue {
+        let a1 = match args.first().and_then(A1::decode) {
+            Some(a) => a,
+            None => return pb::EncodedValue { kind: None },
+        };
+        let a2 = match args.get(1).and_then(A2::decode) {
+            Some(a) => a,
+            None => return pb::EncodedValue { kind: None },
+        };
+        // A missing trailing slot decodes as null, so Option-typed
+        // trailing params read None when the caller omitted them.
+        let null_slot = pb::EncodedValue { kind: None };
+        let a3 = match A3::decode(args.get(2).unwrap_or(&null_slot)) {
+            Some(a) => a,
+            None => return pb::EncodedValue { kind: None },
+        };
+        (self.func)(a1, a2, a3).encode()
+    }
+}
+
 pub fn external_fn_1<A: ProtoSerde, R: ProtoSerde>(
     entry: UdfCatalogEntry,
     func: impl Fn(A) -> R + Send + Sync,
@@ -294,6 +330,13 @@ pub fn external_fn_2<A1: ProtoSerde, A2: ProtoSerde, R: ProtoSerde>(
     func: impl Fn(A1, A2) -> R + Send + Sync,
 ) -> ExternalFn2<A1, A2, R, impl Fn(A1, A2) -> R + Send + Sync> {
     ExternalFn2 { entry, func, _phantom: std::marker::PhantomData }
+}
+
+pub fn external_fn_3<A1: ProtoSerde, A2: ProtoSerde, A3: ProtoSerde, R: ProtoSerde>(
+    entry: UdfCatalogEntry,
+    func: impl Fn(A1, A2, A3) -> R + Send + Sync,
+) -> ExternalFn3<A1, A2, A3, R, impl Fn(A1, A2, A3) -> R + Send + Sync> {
+    ExternalFn3 { entry, func, _phantom: std::marker::PhantomData }
 }
 
 #[cfg(test)]
@@ -351,6 +394,23 @@ mod tests {
         let entry = test_entry("str_len", vec![param("s", ValueType::String)], ValueType::I64);
         let f = external_fn_1(entry, |s: String| -> i64 { s.len() as i64 });
         assert_eq!(f.call(&[enc_i64(42)]).kind, None);
+    }
+
+    #[test]
+    fn external_fn_3_missing_trailing_slot_decodes_as_null() {
+        let entry = test_entry("three", vec![], ValueType::String);
+        let f = external_fn_3(entry, |s: String, n: i64, mode: Option<String>| -> String {
+            format!("{s}/{n}/{}", mode.unwrap_or_else(|| "default".into()))
+        });
+        // Two args provided to a 3-arg function: the missing trailing
+        // slot decodes as null, so an Option param reads None.
+        let r = f.call(&[enc_string("a"), enc_i64(2)]);
+        assert_eq!(r.kind, Some(Kind::StringValue("a/2/default".into())));
+        let r = f.call(&[enc_string("a"), enc_i64(2), enc_string("m")]);
+        assert_eq!(r.kind, Some(Kind::StringValue("a/2/m".into())));
+        // Explicit null in the slot is the same as missing.
+        let r = f.call(&[enc_string("a"), enc_i64(2), null()]);
+        assert_eq!(r.kind, Some(Kind::StringValue("a/2/default".into())));
     }
 
     #[test]

@@ -332,6 +332,22 @@ fn convert_free_function(
                 arg2: boxed(convert_with_udfs(&args[2], has_udf, external_names)?),
             })
         }
+        "url_path_segment" => {
+            expect_args(name, 3, args)?;
+            Ok(LogExpr::UrlPathSegment {
+                arg0: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
+                arg1: boxed(convert_with_udfs(&args[1], has_udf, external_names)?),
+                arg2: boxed(convert_with_udfs(&args[2], has_udf, external_names)?),
+            })
+        }
+        "url_query_param" => {
+            expect_args(name, 3, args)?;
+            Ok(LogExpr::UrlQueryParam {
+                arg0: boxed(convert_with_udfs(&args[0], has_udf, external_names)?),
+                arg1: boxed(convert_with_udfs(&args[1], has_udf, external_names)?),
+                arg2: boxed(convert_with_udfs(&args[2], has_udf, external_names)?),
+            })
+        }
         _ => {
             if external_names.contains(name) {
                 let converted_args: Vec<Box<LogExpr>> = args.iter()

@@ -210,6 +210,8 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
         LogExpr::RegexMatch { receiver, arg } => LogExpr::RegexMatch { receiver: n(receiver), arg: n(arg) },
         LogExpr::RegexExtract { lhs, rhs } => LogExpr::RegexExtract { lhs: n(lhs), rhs: n(rhs) },
         LogExpr::RegexReplace { arg0, arg1, arg2 } => LogExpr::RegexReplace { arg0: n(arg0), arg1: n(arg1), arg2: n(arg2) },
+        LogExpr::UrlPathSegment { arg0, arg1, arg2 } => LogExpr::UrlPathSegment { arg0: n(arg0), arg1: n(arg1), arg2: n(arg2) },
+        LogExpr::UrlQueryParam { arg0, arg1, arg2 } => LogExpr::UrlQueryParam { arg0: n(arg0), arg1: n(arg1), arg2: n(arg2) },
 
         // Ternary
         LogExpr::Between { arg0, arg1, arg2 } => LogExpr::Between { arg0: n(arg0), arg1: n(arg1), arg2: n(arg2) },

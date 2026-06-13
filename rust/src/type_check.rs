@@ -23,7 +23,7 @@ impl From<&meta_types::external_fn::UdfCatalogEntry> for ExternalUdfMeta {
 }
 
 const _: () = assert!(
-    crate::expr_gen::EXPR_GEN_HASH == 0x507f3a2dddb977fe,
+    crate::expr_gen::EXPR_GEN_HASH == 0x4c5dfe8c3da1b6cd,
     "type_check.rs needs review — EXPR_GEN_HASH changed"
 );
 
@@ -202,6 +202,24 @@ impl TypeChecker {
                 let (lhs, _) = self.expect_type(lhs, &ValueType::String, "+")?;
                 let (rhs, _) = self.expect_type(rhs, &ValueType::String, "+")?;
                 Ok((LogExpr::Concat { lhs: Box::new(lhs), rhs: Box::new(rhs) }, ValueType::String))
+            }
+            LogExpr::UrlPathSegment { arg0, arg1, arg2 } => {
+                let (arg0, _) = self.expect_type(arg0, &ValueType::String, "url_path_segment")?;
+                let (arg1, _) = self.expect_type(arg1, &ValueType::I64, "url_path_segment")?;
+                // The mode is an optional trailing parameter: a Null
+                // literal (padded or explicit) means the default mode.
+                let (arg2, _) = self.check(arg2)?;
+                Ok((LogExpr::UrlPathSegment {
+                    arg0: Box::new(arg0), arg1: Box::new(arg1), arg2: Box::new(arg2),
+                }, ValueType::String))
+            }
+            LogExpr::UrlQueryParam { arg0, arg1, arg2 } => {
+                let (arg0, _) = self.expect_type(arg0, &ValueType::String, "url_query_param")?;
+                let (arg1, _) = self.expect_type(arg1, &ValueType::String, "url_query_param")?;
+                let (arg2, _) = self.check(arg2)?;
+                Ok((LogExpr::UrlQueryParam {
+                    arg0: Box::new(arg0), arg1: Box::new(arg1), arg2: Box::new(arg2),
+                }, ValueType::String))
             }
             LogExpr::Upper { operand } => self.check_string_unary(operand, |o| LogExpr::Upper { operand: o }),
             LogExpr::Lower { operand } => self.check_string_unary(operand, |o| LogExpr::Lower { operand: o }),
