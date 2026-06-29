@@ -1,4 +1,5 @@
 pub use meta_types::value;
+pub use meta_types::conformance;
 pub use meta_types::coeffects;
 pub use meta_types::effects;
 pub use meta_types::external_fn;
