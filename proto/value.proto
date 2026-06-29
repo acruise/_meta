@@ -288,6 +288,81 @@ message EncodedMapEntry {
   EncodedValue value = 2;
 }
 
+// --- Validation predicates ---
+//
+// Higher-level validation attached to an entity type, *beyond* structural
+// ValueType conformance. Conformance ("does this Value match this ValueType
+// tree") is the syntax tier and is checked structurally; the predicates below
+// are the business-rule tier (bounds, lengths, patterns, membership, and
+// cross-field expressions).
+//
+// The control-plane persistence algebra never interprets these: they live
+// inside the (opaque-to-the-store) type-declaration payload, so the existing
+// versioning / revision-pinning / epoch machinery carries them for free, and
+// a consumer enforces them at ingest time. They are kept *separate* from
+// ValueType on purpose -- two types that differ only in their validation
+// rules are still the same structural ValueType, and ValueType stays the
+// single source of truth for type identity.
+
+message EntityValidation {
+  // Field-local constraints, each keyed by a path into the entity root struct.
+  repeated FieldRule fields = 1;
+  // Whole-entity predicates (typically cross-field `expr` escape hatches).
+  repeated Constraint entity = 2;
+}
+
+message FieldRule {
+  // Where in the entity root struct these constraints apply. Empty path means
+  // the entity root itself.
+  Path path = 1;
+  repeated Constraint constraints = 2;
+}
+
+// A navigation path into a Value / ValueType tree: the location of a field,
+// element, or entry. Used as the payload on conformance and validation
+// failures, and as the key for a field-local rule. Renders as
+// `addr.lines[0]`.
+message Path {
+  repeated PathSegment segments = 1;
+}
+
+message PathSegment {
+  oneof seg {
+    string field = 1;  // a struct field, by declared name
+    uint64 index = 2;  // an array element or map entry, by iteration position
+  }
+}
+
+// One constraint. The closed-vocabulary variants are cheap, portable, and
+// fully evaluated by meta-types. The `expr` variant is a CEL/LogExpr boolean
+// predicate carried as source and evaluated by the consumer's own expression
+// evaluator (meta-types does not depend on the codegen crate, so it cannot
+// interpret expressions itself).
+message Constraint {
+  oneof kind {
+    Bound min = 1;               // lower bound (any ordered type)
+    Bound max = 2;               // upper bound (any ordered type)
+    uint64 min_len = 3;          // inclusive length lower bound
+    uint64 max_len = 4;          // inclusive length upper bound
+    bool non_empty = 5;          // length >= 1 (the flag's presence is the rule)
+    string pattern = 6;          // full-match regular expression for String
+    OneOfConstraint one_of = 7;  // value must equal one of these
+    string expr = 8;             // CEL/LogExpr boolean predicate source
+  }
+}
+
+message OneOfConstraint {
+  repeated EncodedValue values = 1;
+}
+
+// A min/max bound: the boundary value, plus whether the boundary itself is an
+// accepted value. Exclusive bounds (inclusive = false) matter most for floating
+// point and timestamps, where "strictly before" is the natural constraint.
+message Bound {
+  EncodedValue value = 1;
+  bool inclusive = 2;  // closed bound (boundary accepted) when true; open when false
+}
+
 // --- User-defined type references ---
 
 // A reference to a user-defined Value Type Declaration, looked up by
@@ -296,4 +371,12 @@ message EncodedMapEntry {
 message ValueTypeRef {
   string declaration_id = 1;
   uint64 declaration_revision = 2;
+
+  // Use-site validation predicates. The referenced declaration carries its
+  // own baseline rules; these are *additional* constraints this particular
+  // use site imposes. They compose by conjunction with the declaration's
+  // rules, so a reference can only ever narrow the accepted set (demand a
+  // stricter subset), never widen it. Optional; absent means "exactly the
+  // declaration's contract".
+  EntityValidation validation = 3;
 }
