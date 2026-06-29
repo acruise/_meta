@@ -14,7 +14,8 @@ _meta/
 │   ├── value.proto         # the cluonflux.meta wire model (ValueType, EncodedValue)
 │   └── vendor/cel/expr/    # vendored CEL syntax.proto / checked.proto
 ├── rust-types/             # meta-types crate: hand-written runtime types
-└── rust/                   # meta-codegen crate: the build-time IR generator
+├── rust/                   # meta-codegen crate: the build-time IR generator
+└── rust-store/             # meta-control-plane crate: Postgres control-plane store
 ```
 
 ### The catalogs
@@ -53,6 +54,18 @@ The build-time generator. It reads `function-catalog.yaml` and emits the logical
 
 The `LogExpr` enum is the genuinely shared artifact: every consumer generates it from the *same* catalog, then extends it with its own physical layer (e.g. a consumer's `PhysExpr` adds nodes like `GetColumn` / `GetAggregate` / `GetAccumulator`).
 
+### `meta-control-plane` (`rust-store/`)
+
+The Postgres implementation of the [control-plane persistence algebra](docs/control-plane-persistence-algebra.md): versioned, append-only **entity types** and **entity instances** that reference each other, snapshotted into consistent **epochs**, with closures materialized by traversal. The payload of every type and instance is opaque to this layer (`bytea` plus a consumer-defined `type_tag`); the algebra owns versioning, referencing, and epochs, never interpretation.
+
+- `migrations/0001_init.sql` — the schema. Types and instances are versioned by the identical mechanism but kept in separate parallel tables (`entity_types`/`entity_type_versions`/`entity_type_edges` and `entities`/`entity_versions`/`entity_edges`). The instance->type pointer is split: the **header** binds a type **ID**, each **revision** pins the type **revision** current/selected when it was written. Pinned vs floating edges are encoded with a nullable composite FK under `MATCH SIMPLE`.
+- `src/store.rs` — `ControlPlaneStore`, built on `tokio-postgres` + `deadpool` (async, no build-time database). `put`/`get`/`cut_epoch`/`read_closure`, plus `migrate()` which runs the idempotent DDL.
+- `src/model.rs` — newtyped identifiers (`EntityId` vs `TypeId` vs `VersionId` are not interchangeable) and the `Closure` result.
+
+**One store per project.** There is no scope/tenant column; a store *is* a project's namespace. Do not point two unrelated projects at the same tables. Share a database between projects only when they must coordinate mutations on each other's domain model, and even then prefer a client SDK in front of a single owner over two writers on a shared schema.
+
+This first cut is the core layer only — content-addressing/Merkle identity, structural-shared closure sharing, the interned hot-path index, and epoch GC are deferred (see the design doc's open questions).
+
 ## Building
 
 Each crate is a standalone Cargo package (there is no workspace manifest at the repo root), so build from inside its own directory:
@@ -60,6 +73,8 @@ Each crate is a standalone Cargo package (there is no workspace manifest at the 
 ```sh
 ( cd rust-types && cargo build )
 ( cd rust && cargo build && cargo test )   # cargo test includes the codegen snapshot test
+( cd rust-store && cargo build )           # integration tests need a throwaway Postgres:
+                                           # TEST_DATABASE_URL=postgres://localhost/cp_test cargo test
 ```
 
 Codegen runs automatically as part of the `rust` crate's `build.rs` (it rerun-triggers on changes to `function-catalog.yaml` and `codegen.rs`). To see the generated IR for a catalog directly:
@@ -73,6 +88,25 @@ This prints the generated Rust to stdout and a summary of generated counts to st
 ```sh
 cargo run -q -p <consumer>-codegen -- _meta/function-catalog.yaml meta/<consumer>-catalog.yaml > ir/src/_gen_expr.rs
 ```
+
+## Consuming `_meta`, and co-developing it from a downstream project
+
+A consumer may pull `_meta` in as a git **dependency** rather than a submodule (the actor platform does this: `meta-types = { git = "https://github.com/acruise/_meta.git" }` in its `Cargo.toml`, with `Cargo.lock` pinning the rev). This decouples the consumer's git history from a pinned `_meta` commit — picking up a change is `cargo update -p meta-types`, not a submodule pointer bump.
+
+To hack on `_meta` and a consumer together in one edit-build loop without re-submoduling and without disturbing the consumer's committed (reproducible) build, use a Cargo **path override** in the consumer. Check `_meta` out as a sibling of the consumer, then add a local-only `.cargo/config.toml` in the consumer:
+
+```toml
+# consumer/.cargo/config.toml  (gitignore this file)
+paths = ["../_meta/rust-types"]
+```
+
+This redirects the `meta-types` dependency to your local `_meta` working tree regardless of how it is declared, so edits flow through immediately. Because the file is gitignored, the consumer's committed `Cargo.toml`/`Cargo.lock` still reference the pinned git rev, so anyone else (and CI) gets the reproducible pinned version. Verify it took with `cargo metadata` (the `meta-types` id should read `path+file://.../_meta/rust-types`).
+
+When done: commit and push here, then in the consumer run `cargo update -p meta-types` to bump the pinned rev to the new commit; delete the override to build against the published rev. Caveat: a `paths` override requires the local crate to keep the same name and a compatible version and cannot add/remove the crate's own dependencies while active — if you restructure `meta-types`' dependency graph and Cargo complains, switch to a committed `[patch."https://github.com/acruise/_meta.git"]` entry in the consumer's root `Cargo.toml` (more robust, but committed, so it requires the sibling checkout to exist for every build).
+
+## Design notes
+
+- [`docs/control-plane-persistence-algebra.md`](docs/control-plane-persistence-algebra.md) — draft design for a domain-agnostic control-plane persistence algebra (versioned append-only entities, referential-integrity as the sole write invariant, pinned/floating edges via nullable composite FK, content-addressed immutable epochs, structural-shared transitive closures). Intended as a shared building block, first needed by the actor platform.
 
 ## Working in this repo
 

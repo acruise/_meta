@@ -1,0 +1,15 @@
+[package]
+name = "meta-control-plane"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Postgres-backed control-plane store: versioned, append-only entity types and instances with referential-integrity-only writes"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio-postgres = "0.7"
+deadpool-postgres = "0.14"
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
