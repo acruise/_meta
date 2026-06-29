@@ -107,6 +107,8 @@ When done: commit and push here, then in the consumer run `cargo update -p meta-
 ## Design notes
 
 - [`docs/control-plane-persistence-algebra.md`](docs/control-plane-persistence-algebra.md) — draft design for a domain-agnostic control-plane persistence algebra (versioned append-only entities, referential-integrity as the sole write invariant, pinned/floating edges via nullable composite FK, content-addressed immutable epochs, structural-shared transitive closures). Intended as a shared building block, first needed by the actor platform.
+- [`docs/entity-validation-predicates.md`](docs/entity-validation-predicates.md) — finer-grained validation attached to entity types beyond `Value`/`ValueType` conformance: a two-tier model (structural conformance vs. business-rule predicates) with a matching pair of effects, a hybrid closed-vocabulary + CEL-expression representation, and a first-class navigation `Path`. First cut implemented in `meta-types` (`rust-types/src/validation.rs`).
+- [`docs/codegen-content-hashing.md`](docs/codegen-content-hashing.md) — the paranoid `EXPR_GEN_HASH` guard for multi-layered codegen: why the generated IR carries a content hash of the catalog *and* the generator's own source, how the compile-time assert in `type_check.rs` forces a human re-read on semantic-only catalog drift, the three-guard split (compiler exhaustiveness / snapshot / hash assert), the per-file convention, and how a consumer layer should fold the substrate hash into its own.
 
 ## Working in this repo
 

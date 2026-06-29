@@ -10,6 +10,7 @@ yaml-catalog = ["serde", "serde_yaml"]
 
 [dependencies]
 prost = "0.13"
+regex = "1"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_yaml = { version = "0.9", optional = true }
 

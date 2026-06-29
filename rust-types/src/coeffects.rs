@@ -9,6 +9,17 @@ use std::collections::HashSet;
 /// Parameterized variants (e.g. `ReadsCurrentTime` with different
 /// granularities) are distinct entries in the set. Coalescing
 /// (e.g. taking the finest granularity) happens after construction.
+///
+/// Coeffect *kinds* (the variant tags here) are meant to be declared in
+/// the function catalog -- the single source of truth -- as plain string
+/// tags; codegen validates that every use names a declared kind. A
+/// kind's parameter space is not declared and is open: it is supplied at
+/// the use-site, not enumerated in the catalog. `ReadsEventData` /
+/// `ReadsAggregates` / `ReadsEnrichment` are nullary; `ReadsCurrentTime`
+/// carries a `TimeGranularity` and `CallsExternalUdf` a `UdfLanguage`,
+/// neither enumerable in the catalog. The per-entry `coeffects: [...]`
+/// list already names declared kinds this way. (Not yet wired through
+/// codegen; see `docs/entity-validation-predicates.md`.)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Coeffect {
     /// Reads event field data. Memoize per event, discard before next.
