@@ -524,6 +524,39 @@
   return: string
   null_semantics: propagate
 
+- id: url_path_segment
+  internal: UrlPathSegment
+  cel: url_path_segment
+  status: mapped
+  notes: >
+    Zero-based path segment of a URL or URL reference, e.g.
+    url_path_segment("https://h/a/b/c", 1) is "b". The third argument
+    selects a parse mode: "auto" (also the meaning of a null mode)
+    accepts authority-less references such as "/foo/bar.php?baz=quux";
+    "require_scheme" accepts only absolute URLs; "require_authority"
+    additionally requires a non-empty host. Returns null when the input
+    does not satisfy the mode, the URL cannot carry a path, the index
+    is negative or past the last segment, or the mode string is
+    unrecognized. A literal mode is a candidate for literal-argument
+    specialization.
+  params: [string, int, string]
+  return: string
+
+- id: url_query_param
+  internal: UrlQueryParam
+  cel: url_query_param
+  status: mapped
+  notes: >
+    First value of a URL query parameter by name, percent-decoded per
+    the WHATWG form-urlencoded rules, e.g.
+    url_query_param("https://h/p?a=1&b=2", "b") is "2". The third
+    argument is the same parse mode as url_path_segment ("auto" when
+    null). Returns null when the input does not satisfy the mode or the
+    parameter is absent; an explicitly empty value ("?a=") is the empty
+    string, not null.
+  params: [string, string, string]
+  return: string
+
 - id: size
   internal: Size
   cel: size

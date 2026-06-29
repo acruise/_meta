@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use meta_types::external_fn::UdfImport;
 use crate::expr_gen::LogExpr;
+use crate::value::Value;
 
 #[derive(Debug, Clone)]
 pub struct ResolveError {
@@ -12,10 +15,32 @@ impl std::fmt::Display for ResolveError {
     }
 }
 
+/// Resolution context: the import list plus, when known, each visible
+/// name's full parameter count (from the catalog). Calls with fewer
+/// args than the count are padded with trailing Null literals: the
+/// lowering that resolves arity overloads (optional trailing
+/// parameters) to the single physical ExternalCall shape.
+struct Ctx<'a> {
+    imports: &'a [UdfImport],
+    arities: &'a HashMap<String, usize>,
+}
+
 pub fn resolve(expr: &LogExpr, imports: &[UdfImport]) -> Result<LogExpr, ResolveError> {
+    resolve_with_arities(expr, imports, &HashMap::new())
+}
+
+pub fn resolve_with_arities(
+    expr: &LogExpr,
+    imports: &[UdfImport],
+    arities: &HashMap<String, usize>,
+) -> Result<LogExpr, ResolveError> {
+    resolve_inner(expr, &Ctx { imports, arities })
+}
+
+fn resolve_inner(expr: &LogExpr, ctx: &Ctx<'_>) -> Result<LogExpr, ResolveError> {
     match expr {
         LogExpr::UnresolvedCall { name, args } => {
-            let matches: Vec<&UdfImport> = imports.iter()
+            let matches: Vec<&UdfImport> = ctx.imports.iter()
                 .filter(|imp| imp.visible_name() == name)
                 .collect();
             match matches.len() {
@@ -24,9 +49,14 @@ pub fn resolve(expr: &LogExpr, imports: &[UdfImport]) -> Result<LogExpr, Resolve
                 }),
                 1 => {
                     let imp = matches[0];
-                    let resolved_args = args.iter()
-                        .map(|a| resolve(a, imports).map(Box::new))
+                    let mut resolved_args = args.iter()
+                        .map(|a| resolve_inner(a, ctx).map(Box::new))
                         .collect::<Result<Vec<_>, _>>()?;
+                    if let Some(&arity) = ctx.arities.get(name) {
+                        while resolved_args.len() < arity {
+                            resolved_args.push(Box::new(LogExpr::Literal(Value::Null)));
+                        }
+                    }
                     Ok(LogExpr::ExternalCall {
                         udf: imp.to_resolved(),
                         args: resolved_args,
@@ -46,7 +76,7 @@ pub fn resolve(expr: &LogExpr, imports: &[UdfImport]) -> Result<LogExpr, Resolve
 
         LogExpr::ExternalCall { udf, args } => {
             let resolved_args = args.iter()
-                .map(|a| resolve(a, imports).map(Box::new))
+                .map(|a| resolve_inner(a, ctx).map(Box::new))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(LogExpr::ExternalCall { udf: udf.clone(), args: resolved_args })
         }
@@ -56,120 +86,122 @@ pub fn resolve(expr: &LogExpr, imports: &[UdfImport]) -> Result<LogExpr, Resolve
         | LogExpr::GetFieldByIndex { .. }
         | LogExpr::CurrentTimestamp => Ok(expr.clone()),
 
-        LogExpr::LogicalOr { lhs, rhs } => Ok(LogExpr::LogicalOr { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::LogicalAnd { lhs, rhs } => Ok(LogExpr::LogicalAnd { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::LogicalNot { operand } => Ok(LogExpr::LogicalNot { operand: r(operand, imports)? }),
-        LogExpr::Equal { lhs, rhs } => Ok(LogExpr::Equal { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::NotEqual { lhs, rhs } => Ok(LogExpr::NotEqual { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::LessThan { lhs, rhs } => Ok(LogExpr::LessThan { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::LessOrEqual { lhs, rhs } => Ok(LogExpr::LessOrEqual { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::GreaterThan { lhs, rhs } => Ok(LogExpr::GreaterThan { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::GreaterOrEqual { lhs, rhs } => Ok(LogExpr::GreaterOrEqual { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Between { arg0, arg1, arg2 } => Ok(LogExpr::Between { arg0: r(arg0, imports)?, arg1: r(arg1, imports)?, arg2: r(arg2, imports)? }),
-        LogExpr::NullSafeEqual { lhs, rhs } => Ok(LogExpr::NullSafeEqual { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::NullSafeNotEqual { lhs, rhs } => Ok(LogExpr::NullSafeNotEqual { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::IsNull { operand } => Ok(LogExpr::IsNull { operand: r(operand, imports)? }),
-        LogExpr::IsNotNull { operand } => Ok(LogExpr::IsNotNull { operand: r(operand, imports)? }),
-        LogExpr::IsNan { operand } => Ok(LogExpr::IsNan { operand: r(operand, imports)? }),
-        LogExpr::IsFinite { operand } => Ok(LogExpr::IsFinite { operand: r(operand, imports)? }),
-        LogExpr::IsInfinite { operand } => Ok(LogExpr::IsInfinite { operand: r(operand, imports)? }),
-        LogExpr::Coalesce { lhs, rhs } => Ok(LogExpr::Coalesce { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::TryOrElse { lhs, rhs } => Ok(LogExpr::TryOrElse { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::RaiseError { operand } => Ok(LogExpr::RaiseError { operand: r(operand, imports)? }),
-        LogExpr::Least { lhs, rhs } => Ok(LogExpr::Least { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Greatest { lhs, rhs } => Ok(LogExpr::Greatest { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Add { lhs, rhs } => Ok(LogExpr::Add { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Subtract { lhs, rhs } => Ok(LogExpr::Subtract { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Multiply { lhs, rhs } => Ok(LogExpr::Multiply { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Divide { lhs, rhs } => Ok(LogExpr::Divide { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Negate { operand } => Ok(LogExpr::Negate { operand: r(operand, imports)? }),
-        LogExpr::Modulus { lhs, rhs } => Ok(LogExpr::Modulus { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Abs { operand } => Ok(LogExpr::Abs { operand: r(operand, imports)? }),
-        LogExpr::Power { lhs, rhs } => Ok(LogExpr::Power { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Sqrt { operand } => Ok(LogExpr::Sqrt { operand: r(operand, imports)? }),
-        LogExpr::Exp { operand } => Ok(LogExpr::Exp { operand: r(operand, imports)? }),
-        LogExpr::Sign { operand } => Ok(LogExpr::Sign { operand: r(operand, imports)? }),
-        LogExpr::Contains { receiver, arg } => Ok(LogExpr::Contains { receiver: r(receiver, imports)?, arg: r(arg, imports)? }),
-        LogExpr::StartsWith { receiver, arg } => Ok(LogExpr::StartsWith { receiver: r(receiver, imports)?, arg: r(arg, imports)? }),
-        LogExpr::EndsWith { receiver, arg } => Ok(LogExpr::EndsWith { receiver: r(receiver, imports)?, arg: r(arg, imports)? }),
-        LogExpr::RegexMatch { receiver, arg } => Ok(LogExpr::RegexMatch { receiver: r(receiver, imports)?, arg: r(arg, imports)? }),
-        LogExpr::RegexExtract { lhs, rhs } => Ok(LogExpr::RegexExtract { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::RegexReplace { arg0, arg1, arg2 } => Ok(LogExpr::RegexReplace { arg0: r(arg0, imports)?, arg1: r(arg1, imports)?, arg2: r(arg2, imports)? }),
-        LogExpr::Size { operand } => Ok(LogExpr::Size { operand: r(operand, imports)? }),
-        LogExpr::Lower { operand } => Ok(LogExpr::Lower { operand: r(operand, imports)? }),
-        LogExpr::Upper { operand } => Ok(LogExpr::Upper { operand: r(operand, imports)? }),
-        LogExpr::Substring { arg0, arg1, arg2 } => Ok(LogExpr::Substring { arg0: r(arg0, imports)?, arg1: r(arg1, imports)?, arg2: r(arg2, imports)? }),
-        LogExpr::Replace { arg0, arg1, arg2 } => Ok(LogExpr::Replace { arg0: r(arg0, imports)?, arg1: r(arg1, imports)?, arg2: r(arg2, imports)? }),
-        LogExpr::Trim { operand } => Ok(LogExpr::Trim { operand: r(operand, imports)? }),
-        LogExpr::StringSplit { lhs, rhs } => Ok(LogExpr::StringSplit { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::StringPosition { lhs, rhs } => Ok(LogExpr::StringPosition { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Concat { lhs, rhs } => Ok(LogExpr::Concat { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::TimestampExtract { operand } => Ok(LogExpr::TimestampExtract { operand: r(operand, imports)? }),
-        LogExpr::RoundTemporal { operand } => Ok(LogExpr::RoundTemporal { operand: r(operand, imports)? }),
-        LogExpr::RoundCalendar { operand } => Ok(LogExpr::RoundCalendar { operand: r(operand, imports)? }),
-        LogExpr::CastBool { operand } => Ok(LogExpr::CastBool { operand: r(operand, imports)? }),
-        LogExpr::CastInt { operand } => Ok(LogExpr::CastInt { operand: r(operand, imports)? }),
-        LogExpr::CastUint { operand } => Ok(LogExpr::CastUint { operand: r(operand, imports)? }),
-        LogExpr::CastDouble { operand } => Ok(LogExpr::CastDouble { operand: r(operand, imports)? }),
-        LogExpr::CastString { operand } => Ok(LogExpr::CastString { operand: r(operand, imports)? }),
-        LogExpr::CastBytes { operand } => Ok(LogExpr::CastBytes { operand: r(operand, imports)? }),
-        LogExpr::CastDuration { operand } => Ok(LogExpr::CastDuration { operand: r(operand, imports)? }),
-        LogExpr::CastTimestamp { operand } => Ok(LogExpr::CastTimestamp { operand: r(operand, imports)? }),
-        LogExpr::TypeOf { operand } => Ok(LogExpr::TypeOf { operand: r(operand, imports)? }),
-        LogExpr::Dyn { operand } => Ok(LogExpr::Dyn { operand: r(operand, imports)? }),
+        LogExpr::LogicalOr { lhs, rhs } => Ok(LogExpr::LogicalOr { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::LogicalAnd { lhs, rhs } => Ok(LogExpr::LogicalAnd { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::LogicalNot { operand } => Ok(LogExpr::LogicalNot { operand: r(operand, ctx)? }),
+        LogExpr::Equal { lhs, rhs } => Ok(LogExpr::Equal { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::NotEqual { lhs, rhs } => Ok(LogExpr::NotEqual { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::LessThan { lhs, rhs } => Ok(LogExpr::LessThan { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::LessOrEqual { lhs, rhs } => Ok(LogExpr::LessOrEqual { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::GreaterThan { lhs, rhs } => Ok(LogExpr::GreaterThan { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::GreaterOrEqual { lhs, rhs } => Ok(LogExpr::GreaterOrEqual { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Between { arg0, arg1, arg2 } => Ok(LogExpr::Between { arg0: r(arg0, ctx)?, arg1: r(arg1, ctx)?, arg2: r(arg2, ctx)? }),
+        LogExpr::NullSafeEqual { lhs, rhs } => Ok(LogExpr::NullSafeEqual { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::NullSafeNotEqual { lhs, rhs } => Ok(LogExpr::NullSafeNotEqual { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::IsNull { operand } => Ok(LogExpr::IsNull { operand: r(operand, ctx)? }),
+        LogExpr::IsNotNull { operand } => Ok(LogExpr::IsNotNull { operand: r(operand, ctx)? }),
+        LogExpr::IsNan { operand } => Ok(LogExpr::IsNan { operand: r(operand, ctx)? }),
+        LogExpr::IsFinite { operand } => Ok(LogExpr::IsFinite { operand: r(operand, ctx)? }),
+        LogExpr::IsInfinite { operand } => Ok(LogExpr::IsInfinite { operand: r(operand, ctx)? }),
+        LogExpr::Coalesce { lhs, rhs } => Ok(LogExpr::Coalesce { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::TryOrElse { lhs, rhs } => Ok(LogExpr::TryOrElse { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::RaiseError { operand } => Ok(LogExpr::RaiseError { operand: r(operand, ctx)? }),
+        LogExpr::Least { lhs, rhs } => Ok(LogExpr::Least { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Greatest { lhs, rhs } => Ok(LogExpr::Greatest { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Add { lhs, rhs } => Ok(LogExpr::Add { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Subtract { lhs, rhs } => Ok(LogExpr::Subtract { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Multiply { lhs, rhs } => Ok(LogExpr::Multiply { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Divide { lhs, rhs } => Ok(LogExpr::Divide { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Negate { operand } => Ok(LogExpr::Negate { operand: r(operand, ctx)? }),
+        LogExpr::Modulus { lhs, rhs } => Ok(LogExpr::Modulus { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Abs { operand } => Ok(LogExpr::Abs { operand: r(operand, ctx)? }),
+        LogExpr::Power { lhs, rhs } => Ok(LogExpr::Power { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Sqrt { operand } => Ok(LogExpr::Sqrt { operand: r(operand, ctx)? }),
+        LogExpr::Exp { operand } => Ok(LogExpr::Exp { operand: r(operand, ctx)? }),
+        LogExpr::Sign { operand } => Ok(LogExpr::Sign { operand: r(operand, ctx)? }),
+        LogExpr::Contains { receiver, arg } => Ok(LogExpr::Contains { receiver: r(receiver, ctx)?, arg: r(arg, ctx)? }),
+        LogExpr::StartsWith { receiver, arg } => Ok(LogExpr::StartsWith { receiver: r(receiver, ctx)?, arg: r(arg, ctx)? }),
+        LogExpr::EndsWith { receiver, arg } => Ok(LogExpr::EndsWith { receiver: r(receiver, ctx)?, arg: r(arg, ctx)? }),
+        LogExpr::RegexMatch { receiver, arg } => Ok(LogExpr::RegexMatch { receiver: r(receiver, ctx)?, arg: r(arg, ctx)? }),
+        LogExpr::RegexExtract { lhs, rhs } => Ok(LogExpr::RegexExtract { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::RegexReplace { arg0, arg1, arg2 } => Ok(LogExpr::RegexReplace { arg0: r(arg0, ctx)?, arg1: r(arg1, ctx)?, arg2: r(arg2, ctx)? }),
+        LogExpr::UrlPathSegment { arg0, arg1, arg2 } => Ok(LogExpr::UrlPathSegment { arg0: r(arg0, ctx)?, arg1: r(arg1, ctx)?, arg2: r(arg2, ctx)? }),
+        LogExpr::UrlQueryParam { arg0, arg1, arg2 } => Ok(LogExpr::UrlQueryParam { arg0: r(arg0, ctx)?, arg1: r(arg1, ctx)?, arg2: r(arg2, ctx)? }),
+        LogExpr::Size { operand } => Ok(LogExpr::Size { operand: r(operand, ctx)? }),
+        LogExpr::Lower { operand } => Ok(LogExpr::Lower { operand: r(operand, ctx)? }),
+        LogExpr::Upper { operand } => Ok(LogExpr::Upper { operand: r(operand, ctx)? }),
+        LogExpr::Substring { arg0, arg1, arg2 } => Ok(LogExpr::Substring { arg0: r(arg0, ctx)?, arg1: r(arg1, ctx)?, arg2: r(arg2, ctx)? }),
+        LogExpr::Replace { arg0, arg1, arg2 } => Ok(LogExpr::Replace { arg0: r(arg0, ctx)?, arg1: r(arg1, ctx)?, arg2: r(arg2, ctx)? }),
+        LogExpr::Trim { operand } => Ok(LogExpr::Trim { operand: r(operand, ctx)? }),
+        LogExpr::StringSplit { lhs, rhs } => Ok(LogExpr::StringSplit { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::StringPosition { lhs, rhs } => Ok(LogExpr::StringPosition { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Concat { lhs, rhs } => Ok(LogExpr::Concat { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::TimestampExtract { operand } => Ok(LogExpr::TimestampExtract { operand: r(operand, ctx)? }),
+        LogExpr::RoundTemporal { operand } => Ok(LogExpr::RoundTemporal { operand: r(operand, ctx)? }),
+        LogExpr::RoundCalendar { operand } => Ok(LogExpr::RoundCalendar { operand: r(operand, ctx)? }),
+        LogExpr::CastBool { operand } => Ok(LogExpr::CastBool { operand: r(operand, ctx)? }),
+        LogExpr::CastInt { operand } => Ok(LogExpr::CastInt { operand: r(operand, ctx)? }),
+        LogExpr::CastUint { operand } => Ok(LogExpr::CastUint { operand: r(operand, ctx)? }),
+        LogExpr::CastDouble { operand } => Ok(LogExpr::CastDouble { operand: r(operand, ctx)? }),
+        LogExpr::CastString { operand } => Ok(LogExpr::CastString { operand: r(operand, ctx)? }),
+        LogExpr::CastBytes { operand } => Ok(LogExpr::CastBytes { operand: r(operand, ctx)? }),
+        LogExpr::CastDuration { operand } => Ok(LogExpr::CastDuration { operand: r(operand, ctx)? }),
+        LogExpr::CastTimestamp { operand } => Ok(LogExpr::CastTimestamp { operand: r(operand, ctx)? }),
+        LogExpr::TypeOf { operand } => Ok(LogExpr::TypeOf { operand: r(operand, ctx)? }),
+        LogExpr::Dyn { operand } => Ok(LogExpr::Dyn { operand: r(operand, ctx)? }),
         LogExpr::Conditional { condition, then_expr, else_expr } => Ok(LogExpr::Conditional {
-            condition: r(condition, imports)?,
-            then_expr: r(then_expr, imports)?,
-            else_expr: r(else_expr, imports)?,
+            condition: r(condition, ctx)?,
+            then_expr: r(then_expr, ctx)?,
+            else_expr: r(else_expr, ctx)?,
         }),
-        LogExpr::Index { lhs, rhs } => Ok(LogExpr::Index { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::In { lhs, rhs } => Ok(LogExpr::In { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::Ln { operand } => Ok(LogExpr::Ln { operand: r(operand, imports)? }),
-        LogExpr::Log10 { operand } => Ok(LogExpr::Log10 { operand: r(operand, imports)? }),
-        LogExpr::Ceil { operand } => Ok(LogExpr::Ceil { operand: r(operand, imports)? }),
-        LogExpr::Floor { operand } => Ok(LogExpr::Floor { operand: r(operand, imports)? }),
-        LogExpr::Round { operand } => Ok(LogExpr::Round { operand: r(operand, imports)? }),
-        LogExpr::JsonParse { operand } => Ok(LogExpr::JsonParse { operand: r(operand, imports)? }),
-        LogExpr::JsonParseStruct { operand } => Ok(LogExpr::JsonParseStruct { operand: r(operand, imports)? }),
-        LogExpr::JsonStringify { operand } => Ok(LogExpr::JsonStringify { operand: r(operand, imports)? }),
-        LogExpr::JsonExtract { lhs, rhs } => Ok(LogExpr::JsonExtract { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::JsonExtractString { lhs, rhs } => Ok(LogExpr::JsonExtractString { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::CidrContains { lhs, rhs } => Ok(LogExpr::CidrContains { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::CidrMatch { lhs, rhs } => Ok(LogExpr::CidrMatch { lhs: r(lhs, imports)?, rhs: r(rhs, imports)? }),
-        LogExpr::IpToInt { operand } => Ok(LogExpr::IpToInt { operand: r(operand, imports)? }),
-        LogExpr::IntToIp { operand } => Ok(LogExpr::IntToIp { operand: r(operand, imports)? }),
-        LogExpr::Has { operand } => Ok(LogExpr::Has { operand: r(operand, imports)? }),
+        LogExpr::Index { lhs, rhs } => Ok(LogExpr::Index { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::In { lhs, rhs } => Ok(LogExpr::In { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::Ln { operand } => Ok(LogExpr::Ln { operand: r(operand, ctx)? }),
+        LogExpr::Log10 { operand } => Ok(LogExpr::Log10 { operand: r(operand, ctx)? }),
+        LogExpr::Ceil { operand } => Ok(LogExpr::Ceil { operand: r(operand, ctx)? }),
+        LogExpr::Floor { operand } => Ok(LogExpr::Floor { operand: r(operand, ctx)? }),
+        LogExpr::Round { operand } => Ok(LogExpr::Round { operand: r(operand, ctx)? }),
+        LogExpr::JsonParse { operand } => Ok(LogExpr::JsonParse { operand: r(operand, ctx)? }),
+        LogExpr::JsonParseStruct { operand } => Ok(LogExpr::JsonParseStruct { operand: r(operand, ctx)? }),
+        LogExpr::JsonStringify { operand } => Ok(LogExpr::JsonStringify { operand: r(operand, ctx)? }),
+        LogExpr::JsonExtract { lhs, rhs } => Ok(LogExpr::JsonExtract { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::JsonExtractString { lhs, rhs } => Ok(LogExpr::JsonExtractString { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::CidrContains { lhs, rhs } => Ok(LogExpr::CidrContains { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::CidrMatch { lhs, rhs } => Ok(LogExpr::CidrMatch { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),
+        LogExpr::IpToInt { operand } => Ok(LogExpr::IpToInt { operand: r(operand, ctx)? }),
+        LogExpr::IntToIp { operand } => Ok(LogExpr::IntToIp { operand: r(operand, ctx)? }),
+        LogExpr::Has { operand } => Ok(LogExpr::Has { operand: r(operand, ctx)? }),
         LogExpr::GetChildByName { child_name, operand } => Ok(LogExpr::GetChildByName {
             child_name: child_name.clone(),
-            operand: r(operand, imports)?,
+            operand: r(operand, ctx)?,
         }),
         LogExpr::GetChildByIndex { child_index, lhs, rhs } => Ok(LogExpr::GetChildByIndex {
             child_index: *child_index,
-            lhs: r(lhs, imports)?,
-            rhs: r(rhs, imports)?,
+            lhs: r(lhs, ctx)?,
+            rhs: r(rhs, ctx)?,
         }),
-        LogExpr::All { collection, binding, body } => Ok(LogExpr::All { collection: r(collection, imports)?, binding: binding.clone(), body: r(body, imports)? }),
-        LogExpr::Exists { collection, binding, body } => Ok(LogExpr::Exists { collection: r(collection, imports)?, binding: binding.clone(), body: r(body, imports)? }),
-        LogExpr::ExistsOne { collection, binding, body } => Ok(LogExpr::ExistsOne { collection: r(collection, imports)?, binding: binding.clone(), body: r(body, imports)? }),
-        LogExpr::Filter { collection, binding, body } => Ok(LogExpr::Filter { collection: r(collection, imports)?, binding: binding.clone(), body: r(body, imports)? }),
-        LogExpr::MapTransform { collection, binding, body } => Ok(LogExpr::MapTransform { collection: r(collection, imports)?, binding: binding.clone(), body: r(body, imports)? }),
+        LogExpr::All { collection, binding, body } => Ok(LogExpr::All { collection: r(collection, ctx)?, binding: binding.clone(), body: r(body, ctx)? }),
+        LogExpr::Exists { collection, binding, body } => Ok(LogExpr::Exists { collection: r(collection, ctx)?, binding: binding.clone(), body: r(body, ctx)? }),
+        LogExpr::ExistsOne { collection, binding, body } => Ok(LogExpr::ExistsOne { collection: r(collection, ctx)?, binding: binding.clone(), body: r(body, ctx)? }),
+        LogExpr::Filter { collection, binding, body } => Ok(LogExpr::Filter { collection: r(collection, ctx)?, binding: binding.clone(), body: r(body, ctx)? }),
+        LogExpr::MapTransform { collection, binding, body } => Ok(LogExpr::MapTransform { collection: r(collection, ctx)?, binding: binding.clone(), body: r(body, ctx)? }),
         LogExpr::CelFallback { source, args } => {
             let resolved_args = args.iter()
-                .map(|a| resolve(a, imports).map(Box::new))
+                .map(|a| resolve_inner(a, ctx).map(Box::new))
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(LogExpr::CelFallback { source: source.clone(), args: resolved_args })
         }
         LogExpr::Case { arms, default } => {
             let resolved_arms = arms.iter()
-                .map(|(c, v)| Ok((r(c, imports)?, r(v, imports)?)))
+                .map(|(c, v)| Ok((r(c, ctx)?, r(v, ctx)?)))
                 .collect::<Result<Vec<_>, ResolveError>>()?;
-            Ok(LogExpr::Case { arms: resolved_arms, default: r(default, imports)? })
+            Ok(LogExpr::Case { arms: resolved_arms, default: r(default, ctx)? })
         }
     }
 }
 
-fn r(expr: &LogExpr, imports: &[UdfImport]) -> Result<Box<LogExpr>, ResolveError> {
-    resolve(expr, imports).map(Box::new)
+fn r(expr: &LogExpr, ctx: &Ctx<'_>) -> Result<Box<LogExpr>, ResolveError> {
+    resolve_inner(expr, ctx).map(Box::new)
 }
 
 #[cfg(test)]
@@ -279,6 +311,32 @@ mod tests {
                 assert!(matches!(operand.as_ref(), LogExpr::ExternalCall { .. }));
             }
             other => panic!("expected GetChildByName, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pads_missing_trailing_args_to_arity() {
+        let imports = test_imports();
+        let mut arities = HashMap::new();
+        arities.insert("ua_parse".to_string(), 3usize);
+        let expr = LogExpr::UnresolvedCall {
+            name: "ua_parse".into(),
+            args: vec![Box::new(LogExpr::GetFieldByName { field_name: "ua".into() })],
+        };
+        let resolved = resolve_with_arities(&expr, &imports, &arities).unwrap();
+        match &resolved {
+            LogExpr::ExternalCall { args, .. } => {
+                assert_eq!(args.len(), 3);
+                assert_eq!(args[1].as_ref(), &LogExpr::Literal(Value::Null));
+                assert_eq!(args[2].as_ref(), &LogExpr::Literal(Value::Null));
+            }
+            other => panic!("expected ExternalCall, got {other:?}"),
+        }
+        // Without arity info, no padding.
+        let resolved = resolve(&expr, &imports).unwrap();
+        match &resolved {
+            LogExpr::ExternalCall { args, .. } => assert_eq!(args.len(), 1),
+            other => panic!("expected ExternalCall, got {other:?}"),
         }
     }
 

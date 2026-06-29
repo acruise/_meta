@@ -86,6 +86,10 @@ pub enum LogExpr {
     RegexExtract { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
     /// Replaces all non-overlapping matches of pattern in the input with the replacement string. Capture group back-references ($1, $2, etc.) are supported in the replacement. Pattern is compiled once if the argument is a literal string; non-literal patterns work but recompile on every evaluation.
     RegexReplace { arg0: Box<LogExpr>, arg1: Box<LogExpr>, arg2: Box<LogExpr> },
+    /// Zero-based path segment of a URL or URL reference, e.g. url_path_segment("https://h/a/b/c", 1) is "b". The third argument selects a parse mode: "auto" (also the meaning of a null mode) accepts authority-less references such as "/foo/bar.php?baz=quux"; "require_scheme" accepts only absolute URLs; "require_authority" additionally requires a non-empty host. Returns null when the input does not satisfy the mode, the URL cannot carry a path, the index is negative or past the last segment, or the mode string is unrecognized. A literal mode is a candidate for literal-argument specialization.
+    UrlPathSegment { arg0: Box<LogExpr>, arg1: Box<LogExpr>, arg2: Box<LogExpr> },
+    /// First value of a URL query parameter by name, percent-decoded per the WHATWG form-urlencoded rules, e.g. url_query_param("https://h/p?a=1&b=2", "b") is "2". The third argument is the same parse mode as url_path_segment ("auto" when null). Returns null when the input does not satisfy the mode or the parameter is absent; an explicitly empty value ("?a=") is the empty string, not null.
+    UrlQueryParam { arg0: Box<LogExpr>, arg1: Box<LogExpr>, arg2: Box<LogExpr> },
     /// also maps to Substrait octet_length for bytes, and list/map cardinality
     Size { operand: Box<LogExpr> },
     Lower { operand: Box<LogExpr> },
@@ -251,6 +255,7 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
         },
         LogExpr::Between { arg0, arg1, arg2 } | LogExpr::Substring { arg0, arg1, arg2 }
         | LogExpr::Replace { arg0, arg1, arg2 } | LogExpr::RegexReplace { arg0, arg1, arg2 }
+        | LogExpr::UrlPathSegment { arg0, arg1, arg2 } | LogExpr::UrlQueryParam { arg0, arg1, arg2 }
         => {
             result = result.union(transitive_coeffects(arg0));
             result = result.union(transitive_coeffects(arg1));
@@ -301,4 +306,3 @@ impl LogExpr {
         transitive_coeffects(self).is_pure()
     }
 }
-
