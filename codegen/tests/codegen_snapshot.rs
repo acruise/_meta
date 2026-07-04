@@ -15,7 +15,7 @@ fn strip_hash_lines(s: &str) -> String {
 
 #[test]
 fn codegen_snapshot() {
-    let output = Command::new(env!("CARGO_BIN_EXE_meta-codegen"))
+    let output = Command::new(env!("CARGO_BIN_EXE_codegen"))
         .arg("../function-catalog.yaml")
         .output()
         .expect("failed to run codegen binary");

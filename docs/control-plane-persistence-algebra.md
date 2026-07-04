@@ -123,4 +123,4 @@ columns and avoids threading a tag through every PK and FK.
 
 - Epoch GC: reclaiming versions no longer referenced by any live epoch, coordinated with the FK delete-gate and with content-addressed dedup (a version may be unreferenced in one epoch but identical-by-hash to one still live).
 - Whether the epoch head is a single mutable row or strictly `max(epochId)` over the log, and the read-your-writes story for control-plane operators across replicas.
-- Content-addressing / Merkle identity, structural-shared closure materialization, and the interned local-index hot path are all deferred; the first cut (the `meta-control-plane` crate) implements the core layer -- versioned types/instances, edges, epochs, and closure read by traversal -- only.
+- Content-addressing / Merkle identity, structural-shared closure materialization, and the interned local-index hot path are all deferred; the first cut (the `control-plane` crate) implements the core layer -- versioned types/instances, edges, epochs, and closure read by traversal -- only.

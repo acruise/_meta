@@ -9,7 +9,7 @@
 //! It drops and recreates this crate's tables on the target database, so point
 //! it only at a throwaway database.
 
-use meta_control_plane::{ControlPlaneStore, EntityId, Ref, TypeId, VersionId};
+use control_plane::{ControlPlaneStore, EntityId, Ref, TypeId, VersionId};
 
 const DROP_ALL: &str =
     "drop table if exists epoch_entity_type_selections, epoch_entity_selections, epochs, \

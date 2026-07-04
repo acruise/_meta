@@ -5,7 +5,7 @@ use std::process;
 fn main() {
     let args: Vec<String> = env::args().collect();
     let catalog_path = args.get(1).unwrap_or_else(|| {
-        eprintln!("Usage: meta-codegen <path-to-function-catalog.yaml>");
+        eprintln!("Usage: codegen <path-to-function-catalog.yaml>");
         process::exit(1);
     });
 
@@ -16,7 +16,7 @@ fn main() {
 
     let codegen_source = include_str!("codegen.rs");
 
-    let result = meta_codegen::codegen::generate(&yaml, codegen_source).unwrap_or_else(|e| {
+    let result = codegen::codegen::generate(&yaml, codegen_source).unwrap_or_else(|e| {
         eprintln!("{e}");
         process::exit(1);
     });
