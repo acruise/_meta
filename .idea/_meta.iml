@@ -7,8 +7,14 @@
       <sourceFolder url="file://$MODULE_DIR$/rust/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/rust-store/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/rust-store/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/codegen/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/codegen/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/control-plane/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/control-plane/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/types/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/rust-store/target" />
       <excludeFolder url="file://$MODULE_DIR$/rust/target" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

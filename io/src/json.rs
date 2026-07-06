@@ -1,11 +1,11 @@
 //! JSON <-> [`Value`] round-tripping under a [`ValueType`].
 //!
 //! JSON is the second syntax frontier after proto: where the proto path is
-//! decode-then-[`conformance`](crate::conformance), JSON parsing here is
+//! decode-then-[`conformance`](meta_types::conformance), JSON parsing here is
 //! *schema-directed* -- [`json_to_value`] walks the `ValueType` and the JSON
 //! together and produces a canonical `Value` that conforms by construction
 //! (property-tested below). Everything above syntax -- the
-//! [`validation`](crate::validation) tier -- then applies to JSON-ingested
+//! [`validation`](meta_types::validation) tier -- then applies to JSON-ingested
 //! values exactly as it does to proto-ingested ones.
 //!
 //! Canonicalization rules (strict; no silent coercion):
@@ -43,8 +43,8 @@ use std::collections::BTreeMap;
 
 use serde_json::Value as Json;
 
-use crate::conformance::Mismatch;
-use crate::value::{MapKey, TimestampPrecision, TimestampTimezone, Value, ValueType};
+use meta_types::conformance::Mismatch;
+use meta_types::value::{MapKey, TimestampPrecision, TimestampTimezone, Value, ValueType};
 
 fn err(path: &str, message: impl Into<String>) -> Mismatch {
     Mismatch { path: path.to_string(), message: message.into() }
@@ -810,8 +810,8 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conformance::conforms;
-    use crate::value::StructField;
+    use meta_types::conformance::conforms;
+    use meta_types::value::StructField;
     use serde_json::json;
 
     fn field(name: &str, value_type: ValueType, nullable: bool) -> StructField {

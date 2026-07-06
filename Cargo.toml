@@ -3,5 +3,6 @@ resolver = "2"
 members = [
     "codegen",
     "control-plane",
+    "io",           # crate is named meta-io (wire-format IO over meta-types)
     "types",        # crate is still named meta-types (external consumers depend on it by that name)
 ]
