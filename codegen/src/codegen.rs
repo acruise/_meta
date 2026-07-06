@@ -198,7 +198,7 @@ pub fn generate(yaml: &str, codegen_source: &str) -> Result<CodegenResult, Strin
 
     writeln!(out, "// Generated from function-catalog.yaml — do not edit manually.").unwrap();
     writeln!(out, "// Re-generate with:").unwrap();
-    writeln!(out, "//   cargo run -q -p meta-codegen -- function-catalog.yaml").unwrap();
+    writeln!(out, "//   cargo run -q -p codegen -- function-catalog.yaml").unwrap();
     writeln!(out, "// CATALOG_HASH: {catalog_hash:016x}").unwrap();
     writeln!(out, "// CODEGEN_HASH: {codegen_hash:016x}").unwrap();
     writeln!(out).unwrap();

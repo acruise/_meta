@@ -15,7 +15,7 @@ touched.
 --- EXPECTED OUTPUT BELOW THIS LINE ---
 // Generated from function-catalog.yaml — do not edit manually.
 // Re-generate with:
-//   cargo run -q -p meta-codegen -- function-catalog.yaml
+//   cargo run -q -p codegen -- function-catalog.yaml
 
 use crate::value::Value;
 

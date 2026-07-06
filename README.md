@@ -13,9 +13,10 @@ _meta/
 ├── proto/
 │   ├── value.proto         # the cluonflux.meta wire model (ValueType, EncodedValue)
 │   └── vendor/cel/expr/    # vendored CEL syntax.proto / checked.proto
-├── rust-types/             # meta-types crate: hand-written runtime types
-├── rust/                   # meta-codegen crate: the build-time IR generator
-└── rust-store/             # meta-control-plane crate: Postgres control-plane store
+├── Cargo.toml              # workspace manifest tying the three crates together
+├── types/                  # meta-types crate: hand-written runtime types
+├── codegen/                # codegen crate: the build-time IR generator
+└── control-plane/          # control-plane crate: Postgres control-plane store
 ```
 
 ### The catalogs
@@ -30,7 +31,7 @@ Any column may be absent: an entry with no `internal` generates no IR node; an e
 
 `type-catalog.yaml` does the same for value types, mapping our `ValueType` to CEL runtime types and Substrait types. A deliberate design choice across both catalogs: nullability is a property of the container (column, struct field, array element, map value), never of the type itself.
 
-### `meta-types` (`rust-types/`)
+### `meta-types` (`types/`)
 
 Hand-written runtime types that both consumers depend on. `Value` never appears on the hot path — it is the cold-path / interpreted-evaluator carrier only.
 
@@ -41,7 +42,7 @@ Hand-written runtime types that both consumers depend on. `Value` never appears 
 - `udf_catalog.rs` — YAML parser for external UDF module catalogs (behind the `yaml-catalog` feature).
 - generated `cluonflux::meta` proto module (from `proto/value.proto`).
 
-### `meta-codegen` (`rust/`)
+### `codegen` (`codegen/`)
 
 The build-time generator. It reads `function-catalog.yaml` and emits the logical IR (`LogExpr`) enum plus its coeffect machinery, and provides the translation/checking passes that operate on that IR.
 
@@ -54,7 +55,7 @@ The build-time generator. It reads `function-catalog.yaml` and emits the logical
 
 The `LogExpr` enum is the genuinely shared artifact: every consumer generates it from the *same* catalog, then extends it with its own physical layer (e.g. a consumer's `PhysExpr` adds nodes like `GetColumn` / `GetAggregate` / `GetAccumulator`).
 
-### `meta-control-plane` (`rust-store/`)
+### `control-plane` (`control-plane/`)
 
 The Postgres implementation of the [control-plane persistence algebra](docs/control-plane-persistence-algebra.md): versioned, append-only **entity types** and **entity instances** that reference each other, snapshotted into consistent **epochs**, with closures materialized by traversal. The payload of every type and instance is opaque to this layer (`bytea` plus a consumer-defined `type_tag`); the algebra owns versioning, referencing, and epochs, never interpretation.
 
@@ -68,19 +69,19 @@ This first cut is the core layer only — content-addressing/Merkle identity, st
 
 ## Building
 
-Each crate is a standalone Cargo package (there is no workspace manifest at the repo root), so build from inside its own directory:
+The three crates form a Cargo workspace (`Cargo.toml` at the repo root), so build and test everything from the root:
 
 ```sh
-( cd rust-types && cargo build )
-( cd rust && cargo build && cargo test )   # cargo test includes the codegen snapshot test
-( cd rust-store && cargo build )           # integration tests need a throwaway Postgres:
-                                           # TEST_DATABASE_URL=postgres://localhost/cp_test cargo test
+cargo build --workspace
+cargo test  --workspace   # includes the codegen snapshot test
+                          # control-plane integration tests need a throwaway Postgres:
+                          # TEST_DATABASE_URL=postgres://localhost/cp_test cargo test -p control-plane
 ```
 
-Codegen runs automatically as part of the `rust` crate's `build.rs` (it rerun-triggers on changes to `function-catalog.yaml` and `codegen.rs`). To see the generated IR for a catalog directly:
+The directory names are `types/`, `codegen/`, and `control-plane/`; the crate in `types/` is still *named* `meta-types` (downstream consumers depend on it by that name — see below). Codegen runs automatically as part of the `codegen` crate's `build.rs` (it rerun-triggers on changes to `function-catalog.yaml` and `codegen.rs`). To see the generated IR for a catalog directly:
 
 ```sh
-( cd rust && cargo run -q -- ../function-catalog.yaml )
+cargo run -q -p codegen -- function-catalog.yaml
 ```
 
 This prints the generated Rust to stdout and a summary of generated counts to stderr. Consumers feed their own additional catalogs alongside this one — for example, a consumer regenerates its physical IR by passing this catalog plus its own extension catalog to its codegen binary:
@@ -97,17 +98,17 @@ To hack on `_meta` and a consumer together in one edit-build loop without re-sub
 
 ```toml
 # consumer/.cargo/config.toml  (gitignore this file)
-paths = ["../_meta/rust-types"]
+paths = ["../_meta/types"]
 ```
 
-This redirects the `meta-types` dependency to your local `_meta` working tree regardless of how it is declared, so edits flow through immediately. Because the file is gitignored, the consumer's committed `Cargo.toml`/`Cargo.lock` still reference the pinned git rev, so anyone else (and CI) gets the reproducible pinned version. Verify it took with `cargo metadata` (the `meta-types` id should read `path+file://.../_meta/rust-types`).
+This redirects the `meta-types` dependency to your local `_meta` working tree regardless of how it is declared, so edits flow through immediately. Because the file is gitignored, the consumer's committed `Cargo.toml`/`Cargo.lock` still reference the pinned git rev, so anyone else (and CI) gets the reproducible pinned version. Verify it took with `cargo metadata` (the `meta-types` id should read `path+file://.../_meta/types`).
 
 When done: commit and push here, then in the consumer run `cargo update -p meta-types` to bump the pinned rev to the new commit; delete the override to build against the published rev. Caveat: a `paths` override requires the local crate to keep the same name and a compatible version and cannot add/remove the crate's own dependencies while active — if you restructure `meta-types`' dependency graph and Cargo complains, switch to a committed `[patch."https://github.com/acruise/_meta.git"]` entry in the consumer's root `Cargo.toml` (more robust, but committed, so it requires the sibling checkout to exist for every build).
 
 ## Design notes
 
 - [`docs/control-plane-persistence-algebra.md`](docs/control-plane-persistence-algebra.md) — draft design for a domain-agnostic control-plane persistence algebra (versioned append-only entities, referential-integrity as the sole write invariant, pinned/floating edges via nullable composite FK, content-addressed immutable epochs, structural-shared transitive closures). Intended as a shared building block, first needed by the actor platform.
-- [`docs/entity-validation-predicates.md`](docs/entity-validation-predicates.md) — finer-grained validation attached to entity types beyond `Value`/`ValueType` conformance: a two-tier model (structural conformance vs. business-rule predicates) with a matching pair of effects, a hybrid closed-vocabulary + CEL-expression representation, and a first-class navigation `Path`. First cut implemented in `meta-types` (`rust-types/src/validation.rs`).
+- [`docs/entity-validation-predicates.md`](docs/entity-validation-predicates.md) — finer-grained validation attached to entity types beyond `Value`/`ValueType` conformance: a two-tier model (structural conformance vs. business-rule predicates) with a matching pair of effects, a hybrid closed-vocabulary + CEL-expression representation, and a first-class navigation `Path`. First cut implemented in `meta-types` (`types/src/validation.rs`).
 - [`docs/codegen-content-hashing.md`](docs/codegen-content-hashing.md) — the paranoid `EXPR_GEN_HASH` guard for multi-layered codegen: why the generated IR carries a content hash of the catalog *and* the generator's own source, how the compile-time assert in `type_check.rs` forces a human re-read on semantic-only catalog drift, the three-guard split (compiler exhaustiveness / snapshot / hash assert), the per-file convention, and how a consumer layer should fold the substrate hash into its own.
 
 ## Working in this repo

@@ -1,6 +1,6 @@
 # Entity-type validation predicates
 
-**Status:** Draft + first cut, 2026-06-29. The closed-vocabulary tier is implemented in `meta-types` (`rust-types/src/validation.rs`); the expression escape hatch and the consumer wiring are designed here but not yet built.
+**Status:** Draft + first cut, 2026-06-29. The closed-vocabulary tier is implemented in `meta-types` (`types/src/validation.rs`); the expression escape hatch and the consumer wiring are designed here but not yet built.
 
 ## What this is
 
@@ -45,7 +45,7 @@ Rules attach at two granularities, both serialized into the type-declaration pay
 
 Validation is a `meta-types` concern enforced by the consumer at ingest. It is emphatically *not* a control-plane-store concern: the persistence algebra's load-bearing invariant is that the entity payload is opaque bytes plus a type tag, and "the moment the persistence layer needs to understand what an entity means, the abstraction has leaked." So:
 
-- `EntityValidation` serializes *inside* the type-declaration content -- which, from the store's view, is just opaque payload. The existing versioning, revision-pinning, and epoch machinery therefore carries the rules with **zero** changes to `rust-store`. A given instance revision pins a type revision (per the persistence algebra), and that type revision's payload carries exactly the rules in force when the instance was written; a later rule change never retroactively invalidates an existing revision.
+- `EntityValidation` serializes *inside* the type-declaration content -- which, from the store's view, is just opaque payload. The existing versioning, revision-pinning, and epoch machinery therefore carries the rules with **zero** changes to `control-plane`. A given instance revision pins a type revision (per the persistence algebra), and that type revision's payload carries exactly the rules in force when the instance was written; a later rule change never retroactively invalidates an existing revision.
 - Rules are pure structural overlay on top of `ValueType`, not embedded in it. Two types that differ only in their validation rules are still the same structural `ValueType`. This keeps `ValueType` the single source of truth for type identity (the proto's stated principle) and validation a separable facet.
 
 ## Use-site narrowing: a reference can be stricter than its declaration

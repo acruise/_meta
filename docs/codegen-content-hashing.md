@@ -1,6 +1,6 @@
 # The codegen content-hashing guard
 
-**Status:** Documentation of an implemented mechanism, 2026-06-29. The single-layer guard described here lives in `rust/src/codegen.rs` and `rust/src/type_check.rs`; the multi-layer composition in the last section is the discipline a consumer's own codegen should follow, stated here because nothing in `_meta` can enforce it across a repo boundary.
+**Status:** Documentation of an implemented mechanism, 2026-06-29. The single-layer guard described here lives in `codegen/src/codegen.rs` and `codegen/src/type_check.rs`; the multi-layer composition in the last section is the discipline a consumer's own codegen should follow, stated here because nothing in `_meta` can enforce it across a repo boundary.
 
 ## The problem it solves
 
@@ -24,7 +24,7 @@ These combine into one constant (`combined_hash` hashes the two hashes together)
 EXPR_GEN_HASH = combined_hash(catalog_hash, codegen_hash)
 ```
 
-The generator writes all three into the generated file (`rust/src/codegen.rs:202`):
+The generator writes all three into the generated file (`codegen/src/codegen.rs:202`):
 
 ```rust
 // CATALOG_HASH: <hex>
@@ -40,7 +40,7 @@ The hash is one of three layers, each catching a different class, and the design
 
 1. **Compiler exhaustiveness -- structural drift, for free.** A pass that matches `LogExpr` *exhaustively* (no wildcard arm) fails to compile the moment a variant is added or re-fielded. `udf_resolver.rs` already relies on this and needs no hash assert for the structural class. This is the cheapest guard and the preferred one for structural changes.
 
-2. **The snapshot test -- the exact emitted shape.** `rust/tests/codegen_snapshot.rs` runs the codegen binary and diffs its output against `expected_codegen_output.txt`. Crucially it *strips the three hash lines first* (`strip_hash_lines`), so the snapshot pins the structural text and the hash guard pins the semantics, independently -- a pure metadata edit moves `EXPR_GEN_HASH` but leaves the stripped snapshot identical, and a shape change moves the snapshot. Update this file when a shape change is intentional.
+2. **The snapshot test -- the exact emitted shape.** `codegen/tests/codegen_snapshot.rs` runs the codegen binary and diffs its output against `expected_codegen_output.txt`. Crucially it *strips the three hash lines first* (`strip_hash_lines`), so the snapshot pins the structural text and the hash guard pins the semantics, independently -- a pure metadata edit moves `EXPR_GEN_HASH` but leaves the stripped snapshot identical, and a shape change moves the snapshot. Update this file when a shape change is intentional.
 
 3. **The `EXPR_GEN_HASH` compile-time assert -- semantic-only drift.** `type_check.rs:25` carries:
 

@@ -1,4 +1,5 @@
 pub mod value;
+pub mod conformance;
 pub mod coeffects;
 pub mod effects;
 pub mod external_fn;
