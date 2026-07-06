@@ -7,12 +7,14 @@ description = "Value types, proto serde, coeffects/effects, and native UDF trait
 
 [features]
 yaml-catalog = ["serde", "serde_yaml"]
+json = ["dep:serde_json"]
 
 [dependencies]
 prost = "0.14.4"
 regex = "1"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_yaml = { version = "0.9", optional = true }
+serde_json = { version = "1", optional = true }
 
 [build-dependencies]
 prost-build = "0.14.4"

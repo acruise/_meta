@@ -5,6 +5,9 @@ pub mod effects;
 pub mod external_fn;
 pub mod validation;
 
+#[cfg(feature = "json")]
+pub mod json;
+
 #[cfg(feature = "yaml-catalog")]
 pub mod udf_catalog;
 
