@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 meta-types = { path = "../types" }
+meta-io = { path = "../io" }
 prost = "0.13"
 prost-types = "0.13"
 serde = { version = "1", features = ["derive"] }

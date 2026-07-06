@@ -16,7 +16,7 @@
 //!   - Unknown map keys against a struct schema are tolerated (forward
 //!     compatibility); missing non-nullable fields are not.
 
-use crate::value::{MapKey, Value, ValueType};
+use meta_types::value::{MapKey, Value, ValueType};
 
 /// A single point of disagreement between a value and a type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,7 +281,7 @@ fn variant_name(v: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::StructField;
+    use meta_types::value::StructField;
     use std::collections::BTreeMap;
 
     fn field(name: &str, value_type: ValueType, nullable: bool) -> StructField {

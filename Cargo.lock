@@ -140,6 +140,7 @@ name = "codegen"
 version = "0.1.0"
 dependencies = [
  "cel-parser",
+ "meta-io",
  "meta-types",
  "prettyplease",
  "proc-macro2",
