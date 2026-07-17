@@ -46,11 +46,11 @@ use serde_json::Value as Json;
 use crate::conformance::Mismatch;
 use meta_types::value::{MapKey, TimestampPrecision, TimestampTimezone, Value, ValueType};
 
-fn err(path: &str, message: impl Into<String>) -> Mismatch {
+pub(crate) fn err(path: &str, message: impl Into<String>) -> Mismatch {
     Mismatch { path: path.to_string(), message: message.into() }
 }
 
-fn child_path(path: &str, field: &str) -> String {
+pub(crate) fn child_path(path: &str, field: &str) -> String {
     if path.is_empty() {
         field.to_string()
     } else {
@@ -58,11 +58,11 @@ fn child_path(path: &str, field: &str) -> String {
     }
 }
 
-fn index_path(path: &str, idx: usize) -> String {
+pub(crate) fn index_path(path: &str, idx: usize) -> String {
     format!("{path}[{idx}]")
 }
 
-fn key_path(path: &str, key: &str) -> String {
+pub(crate) fn key_path(path: &str, key: &str) -> String {
     format!("{path}[{key:?}]")
 }
 
@@ -88,7 +88,7 @@ pub fn json_to_value(json: &Json, ty: &ValueType) -> Result<Value, Mismatch> {
     parse(json, ty, false, "")
 }
 
-fn parse(json: &Json, ty: &ValueType, nullable: bool, path: &str) -> Result<Value, Mismatch> {
+pub(crate) fn parse(json: &Json, ty: &ValueType, nullable: bool, path: &str) -> Result<Value, Mismatch> {
     use ValueType as T;
 
     if json.is_null() {
@@ -228,7 +228,8 @@ fn parse_unsigned<T: TryFrom<u64>>(
 }
 
 /// String-representable map keys: parsed from the JSON object's string key.
-fn parse_map_key(k: &str, key_type: &ValueType) -> Option<MapKey> {
+/// (Shared with the YAML frontier, whose scalar keys reach here as text.)
+pub(crate) fn parse_map_key(k: &str, key_type: &ValueType) -> Option<MapKey> {
     use ValueType as T;
     Some(match key_type {
         T::String => MapKey::String(k.to_string()),
@@ -259,7 +260,7 @@ pub fn value_to_json(value: &Value, ty: &ValueType) -> Result<Json, Mismatch> {
     emit(value, ty, "")
 }
 
-fn emit(value: &Value, ty: &ValueType, path: &str) -> Result<Json, Mismatch> {
+pub(crate) fn emit(value: &Value, ty: &ValueType, path: &str) -> Result<Json, Mismatch> {
     use Value as V;
     use ValueType as T;
 
@@ -368,7 +369,7 @@ fn emit(value: &Value, ty: &ValueType, path: &str) -> Result<Json, Mismatch> {
     })
 }
 
-fn format_map_key(k: &MapKey) -> String {
+pub(crate) fn format_map_key(k: &MapKey) -> String {
     match k {
         MapKey::String(s) => s.clone(),
         MapKey::Bool(b) => b.to_string(),

@@ -3,8 +3,10 @@ name = "meta-io"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Wire-format IO for meta-types Values: JSON round-tripping under a ValueType (more formats to come)"
+description = "Wire-format IO for meta-types Values: JSON and YAML round-tripping under a ValueType (more formats to come)"
 
 [dependencies]
 meta-types = { path = "../types" }
 serde_json = "1"
+# Matches the version meta-types' yaml-catalog feature uses.
+serde_yaml = "0.9"
