@@ -26,7 +26,13 @@
 #     notes      — clarifications
 #
 # Substrait type reference:
-#   https://github.com/substrait-io/substrait/blob/main/proto/substrait/type.proto
+#   native types:    https://github.com/substrait-io/substrait/blob/main/proto/substrait/type.proto
+#   extension types: https://github.com/substrait-io/substrait/tree/main/extensions
+#
+# `substrait` names a NATIVE type; `substrait_extension` names a user-defined type from an
+# extension YAML (urn + `u!`-prefixed name + whether it has shipped in a tagged release).
+# Keep them in separate keys — to a consumer, "this type exists" and "this type exists if
+# you load an extension that is still unreleased" are different claims.
 
 # ═══════════════════════════════════════════════════════════════════════
 #  BOOLEAN
@@ -69,36 +75,65 @@
   substrait: i64
   status: mapped
 
+# CORRECTION 2026-08-05: these four previously said "Substrait has no unsigned types".
+# That was true when written and stopped being true on 2026-08-03, when PR #953 added
+# extensions/unsigned_integers.yaml (urn extension:io.substrait:unsigned_integers)
+# defining u8/u16/u32/u64 plus add/subtract/multiply/divide and sum over them.
+#
+# Two caveats keep every one of these at `partial` rather than `mapped`, but for entirely
+# different reasons than before:
+#
+#   1. NOT YET RELEASED. The file exists on main only — it is absent from v0.99.0 (the
+#      current latest tag) and from v0.98.0. Anything pinned to a release still has no
+#      unsigned types.
+#   2. THEY ARE USER-DEFINED TYPES, not native ones. They are referenced as `u!u8` (the
+#      `u!` prefix is required for UDTs), a consumer must load the extension to understand
+#      them at all, and their declared `structure` encodes the value as a decimal STRING —
+#      so this is not a machine-word unsigned integer the way i32 is a machine word.
+#
+# `substrait_extension` is a new key: a native type name in `substrait` and an extension
+# type belong in different columns, because "the type exists" and "the type exists if you
+# load an unreleased extension" are not the same claim to a consumer.
+
 - id: uint8
   internal: UInt8Type
   cel: uint
   substrait: null
+  substrait_extension: { urn: "extension:io.substrait:unsigned_integers", type: "u!u8", released: false }
   status: partial
-  notes: Substrait has no unsigned types; map to i16 to preserve range
+  notes: >
+    Native fallback while unreleased: map to i16 to preserve range.
+    CEL has only int/uint (u64).
 
 - id: uint16
   internal: UInt16Type
   cel: uint
   substrait: null
+  substrait_extension: { urn: "extension:io.substrait:unsigned_integers", type: "u!u16", released: false }
   status: partial
-  notes: Substrait has no unsigned types; map to i32 to preserve range
+  notes: "Native fallback while unreleased: map to i32 to preserve range."
 
 - id: uint32
   internal: UInt32Type
   cel: uint
   substrait: null
+  substrait_extension: { urn: "extension:io.substrait:unsigned_integers", type: "u!u32", released: false }
   status: partial
-  notes: Substrait has no unsigned types; map to i64 to preserve range
+  notes: "Native fallback while unreleased: map to i64 to preserve range."
 
 - id: uint64
   internal: UInt64Type
   cel: uint
   substrait: null
+  substrait_extension: { urn: "extension:io.substrait:unsigned_integers", type: "u!u64", released: false }
   status: partial
   notes: >
-    Substrait has no unsigned types and no i128.
-    Values > i64::MAX require decimal(20,0) or are lossy.
-    CEL uint is u64 natively.
+    u!u64 covers the full 0..18446744073709551615 range, so the previous claim that
+    values > i64::MAX "require decimal(20,0) or are lossy" no longer holds once the
+    extension is available. Until it is released, that fallback still applies: there is
+    no native i128, so decimal(20,0) remains the only lossless native carrier.
+    Note the extension's own `sum` over u!u64 returns u!u64?, so aggregation can still
+    overflow. CEL uint is u64 natively.
 
 # ═══════════════════════════════════════════════════════════════════════
 #  FLOATING POINT
