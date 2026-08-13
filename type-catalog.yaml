@@ -453,3 +453,98 @@
   notes: >
     The type of types in CEL (e.g., type(1) == int).
     No storage representation; exists only in expression evaluation.
+
+# ═══════════════════════════════════════════════════════════════════════
+#  UNITS OF MEASURE
+# ═══════════════════════════════════════════════════════════════════════
+#
+# A unit is DATA attached to a value type, not a phantom type on it.
+#
+# Nearly every units library does compile-time validation via phantom types
+# (F# units of measure, Rust's uom, dimensioned, Boost.Units). That is right
+# for hand-written code and unusable for us: our measures are defined in
+# catalogs and by users at runtime, so a host-language type per measure is not
+# available. What is wanted is a serializable tag a checker can reason about.
+#
+# This is not "checked late". Consumers know their model's shape statically, so
+# unit checking is an analysis run when a model is published -- not the host
+# language's compile time, but not when a user hits the bug either.
+#
+# Serialization is UCUM (Unified Code for Units of Measure): a machine-parseable
+# grammar with real deployment (HL7/FHIR), covering compound units (g/cm3) and
+# prefixes. Rust side, octofhir-ucum-core parses to an AST that preserves
+# annotations -- see the nominal-count note below, which depends on that.
+#
+# THREE BASE-DIMENSION FAMILIES. Classical dimensional analysis covers only the
+# first, and consumers need all three:
+#
+#   physical  length, mass, time. The classical set; UCUM covers it fully.
+#   currency  USD, EUR. NOT in UCUM (see ISO 4217). Unique in that its
+#             conversion factor is TIME-VARYING -- meters to feet is a
+#             constant, USD to EUR is a series -- so conversion is a
+#             computation against a rate, never a table lookup.
+#   nominal   {employee}, {store}. Classically dimensionless, therefore freely
+#             addable, which is exactly the error worth catching in a business
+#             model. UCUM's curly-brace annotations give us the syntax, but
+#             UCUM treats them as semantically transparent; we read them as
+#             DIMENSION-BEARING. A declared deviation from the spec, not an
+#             oversight.
+#
+# Nominal dimensions participate fully in multiplication, which is the point --
+# {employee}.d is person-days, and USD/({employee}.d) x {employee}.d = USD
+# type-checks a payroll calculation. Units here are expressive, not merely a
+# safety rail.
+#
+# They also catch the unit natural language elides. "$50 per hour" really means
+# $50 per PERSON per hour, so the honest unit is USD/({employee}.h). Annotate it
+# as USD/h and the chain
+#
+#   {employee} . d . h/d . USD/h  ==  {employee}.USD
+#
+# leaves a stray {employee} in the result -- employee-dollars rather than
+# dollars -- which is a better error message than a figure that is silently
+# five times too large.
+#
+# CANONICALIZE FOR CHECKING, RETAIN THE AUTHORED FORM FOR DISPLAY. h/d reduces
+# to dimensionless 1/3, which is what makes cancellation exact and what a human
+# must never be shown in place of "8 hours per day".
+
+- id: unit
+  internal: UnitType
+  cel: null
+  substrait: null
+  status: _meta_only
+  params:
+    - { name: ucum, kind: string, notes: "canonical UCUM expression, e.g. 'm/s', 'g/cm3', '{employee}.d'" }
+    - name: dimensions
+      kind: list(DimensionTerm)
+      notes: >
+        Exponent vector over base dimensions, derived from the UCUM expression
+        but stored so a checker need not re-parse. Empty means dimensionless.
+    - { name: scale, kind: decimal, default: 1, notes: "multiplier against base units; km carries 1000" }
+    - name: offset
+      kind: decimal
+      optional: true
+      notes: >
+        Additive offset (Celsius against Kelvin). Kept separate from scale
+        because offsets do NOT compose under multiplication -- degrees-celsius
+        per second is meaningless, and a units system that forgets this
+        produces confident nonsense.
+  notes: >
+    Attached to a value type rather than replacing it: a value is still a
+    decimal, and the unit says what it is commensurable with. Orthogonal to any
+    time-behaviour tag a consumer carries.
+
+- id: dimension_term
+  internal: DimensionTermType
+  cel: null
+  substrait: null
+  status: _meta_only
+  params:
+    - { name: base, kind: string, notes: "'length', 'USD', 'employee'" }
+    - { name: kind, kind: enum, values: [physical, currency, nominal], notes: "which base-dimension family" }
+    - { name: exponent, kind: i32, notes: "signed; m/s is length^1 time^-1" }
+  notes: >
+    One term of a dimension vector. Separated from `unit` so that dimension
+    arithmetic -- adding exponents on multiplication, comparing vectors on
+    addition -- operates on a flat structure rather than by re-parsing UCUM.
