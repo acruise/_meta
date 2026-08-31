@@ -35,6 +35,86 @@
 #
 # Receiver notation: "string.contains" means method-style call in CEL.
 
+# ─── Algebraic and state metadata ──────────────────────────────────────
+#
+# `commutative` and `short_circuits` were the original algebraic columns. They
+# are not enough for a consumer that wants to parallelize: whether partial
+# results may be combined pairwise is `associative`, whether a retraction may be
+# applied without recomputation is `invertible`, and neither is derivable from
+# commutativity. Two optional blocks carry the rest.
+#
+#   algebra:
+#     associative: true       # f(f(a,b),c) == f(a,f(b,c)); licenses tree-parallel
+#                             # combination and, for a Sequence, prefix scan
+#     invertible: true        # has an inverse; licenses incremental maintenance
+#     idempotent: true        # f(a,a) == f(a); licenses upstream dedup
+#     identity: 0             # the identity element, so the empty group needs
+#                             # no special case
+#     exact: false            # whether `associative` holds bitwise. False means
+#                             # it holds only within a numeric bound the consumer
+#                             # supplies. This is the field that keeps one row
+#                             # serving both an analytics policy that reassociates
+#                             # and a ledger policy that refuses.
+#
+#   state:                    # the accumulator, for aggregates and for any
+#                             # expression carrying state across rows
+#     shape: fixed_product    # finite | fixed_product | collection
+#     width_bytes: 8          # for fixed_product
+#     cardinality: 3          # for finite: the case count
+#     growth: constant        # constant | sketched | linear -- how the
+#                             # accumulator grows with group size, which is what
+#                             # decides whether a heavy key can be collapsed
+#                             # before an exchange or has to be spilled
+#     applicative: true       # the transition sequence is statically known, so
+#                             # partial states compose and prefix scan is legal.
+#                             # False means the next transition depends on the
+#                             # previous value (monadic bind), which forbids
+#                             # reassociation regardless of everything above.
+#
+# Why `state` belongs in the shared catalog and not in one consumer's extension
+# layer: both consumers need it and would otherwise each derive it, differently.
+# A wide-logic evaluator needs it to decide memoization and accumulator reuse; a
+# distributed query engine needs it to decide whether a heavy key collapses
+# before an exchange or has to be spilled, and to decide whether a stateful
+# operator can be checkpointed and moved while running. Same fact, same source.
+#
+# Absent means "not known to hold", which is the bottom of every one of these
+# and costs a missed optimization rather than a wrong answer. Do not fill one in
+# because it looks plausible. `invertible` in particular is where an optimistic
+# guess turns into an incorrect result, and several entries below carry `false`
+# with a note explaining a case that looks invertible and is not.
+
+# ─── Substrait compatibility ───────────────────────────────────────────
+#
+# The `substrait:` column is a claim about a SPECIFIC SET of Substrait
+# releases, never a timeless fact. This catalog was originally curated when
+# Substrait looked stable enough that naming a release seemed unnecessary;
+# that assumption is retired. Read every substrait tag against the
+# compatibility matrix declared in `substrait-compat.yaml`, which is the
+# authoritative machine-readable list and is deliberately the only place the
+# version set is written down.
+#
+#   substrait: { ext: functions_boolean, name: or }
+#       Unsubscripted. Means "believed compatible with every release in the
+#       compatibility matrix, and asserted about no release outside it."
+#       It does NOT mean "compatible forever" and it does NOT mean
+#       "compatible with whatever you happen to have vendored."
+#
+#   substrait: { ext: functions_datetime, name: extract, versions: [v0.103.0] }
+#       Subscripted. Narrows the claim to the listed releases only. Use this
+#       when a mapping holds for part of the matrix and not the rest --
+#       a rename, a signature change, an option that became an argument.
+#       A version listed here that is not in the matrix is an error, not a
+#       forward-looking note.
+#
+# The matrix currently holds one release. That is not a licence to treat
+# unsubscripted as unconditional; it means every unsubscripted tag will need
+# re-checking the moment a second release is added, and
+# `check_substrait_compat.py` (in the trabecula repo, run per vendored tree)
+# is what does the checking. Consumers vendor the releases; this repo owns
+# the claim.
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  BOOLEAN / LOGICAL
 # ═══════════════════════════════════════════════════════════════════════
@@ -1334,6 +1414,88 @@
   params: ["struct(...)", u32]
   return: T
   properties: { child_index: u32 }
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STATEFUL TRANSITIONS
+# ═══════════════════════════════════════════════════════════════════════
+#
+# A stateful transition as a typed IR node rather than as metadata about an
+# opaque one. The three type parameters are the whole idea:
+#
+#   ApplicativeStateExpr(in: ValueType, out: ValueType, state: ValueType)
+#
+# Written this way, the properties a consumer needs are read off `state` instead
+# of being declared beside it, and therefore cannot drift out of sync with the
+# code the way an annotation can:
+#
+#   state is EnumType(n)                  -> tabulable; the composed transition
+#                                            is an n x n lookup table
+#   state is StructType of fixed scalars  -> O(1); width is the sum of the field
+#                                            widths, so an accumulator budget is
+#                                            computable rather than guessed
+#   state contains Array/Map/Clob/Blob    -> O(n) in the group, does not
+#                                            decompose, and a heavy key must be
+#                                            spilled rather than collapsed
+#
+# The same representation is what makes the state migratable: a transition
+# function plus a state value can be checkpointed, shipped, and resumed, while a
+# closure over mutable locals cannot. Any consumer that wants to rescale a
+# stateful operator while it runs needs this shape and not an annotation.
+#
+# Applicative versus monadic is the load-bearing distinction and it is carried by
+# which node you pick, not by a flag. In ApplicativeStateExpr the sequence of
+# transitions is statically known, so partial states compose and a parallel
+# prefix scan is legal. In MonadicStateExpr the next transition depends on the
+# previous value, so the sequence is not known ahead of time and reassociation is
+# forbidden no matter what else is true. Two nodes rather than one node with a
+# boolean, because the difference changes what the node *is* and a boolean would
+# invite setting it optimistically.
+#
+# Codegen note: these are the first entries needing TYPE parameters rather than
+# child expressions, and the current generator maps `params` to ExprId children.
+# Generating them needs a `type_params` concept in codegen.rs. Declared here
+# first so the catalog states the intent; the generator change is a separate,
+# reviewed pass.
+
+- id: applicative_state
+  # `internal:` deliberately withheld until codegen understands type_params.
+  # An entry with no `internal` generates no IR node, which is exactly the right
+  # state for a node whose shape the generator cannot yet emit: the catalog
+  # records the intent and the reserved name, and nothing half-built reaches
+  # LogExpr. Adding `internal: ApplicativeStateExpr` is the second half of the
+  # type_params pass, not a separate decision.
+  reserved_internal: ApplicativeStateExpr
+  status: todo
+  type_params: [in, out, state]
+  notes: >
+    A state-to-state transition whose sequence is statically known.
+    Licenses parallel prefix scan and chunked evaluation with a halo.
+    Composition rung and state growth are both derived from the `state`
+    type parameter rather than declared.
+  algebra:
+    associative: true
+    exact: true
+  state:
+    applicative: true
+    shape: derived
+    growth: derived
+
+- id: monadic_state
+  reserved_internal: MonadicStateExpr
+  status: todo
+  type_params: [in, out, state]
+  notes: >
+    A state-to-state transition where the next transition depends on the
+    previous value. Serializes per partition. Present so that the opaque case
+    is representable and diagnosable rather than being an absence, which is
+    what lets a consumer report *which* transition forced sequential
+    evaluation instead of reporting a mysteriously slow plan.
+  algebra:
+    associative: false
+  state:
+    applicative: false
+    shape: derived
+    growth: derived
 
 # ═══════════════════════════════════════════════════════════════════════
 #  SKIPPED SUBSTRAIT EXTENSIONS
