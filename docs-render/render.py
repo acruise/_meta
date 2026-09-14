@@ -19,7 +19,7 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY, TA_RIGHT
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, HRFlowable,
-    Table, TableStyle, PageBreak, KeepTogether,
+    Table, TableStyle, PageBreak, KeepTogether, XPreformatted,
     BaseDocTemplate, Frame, PageTemplate,
 )
 from reportlab.pdfbase import pdfmetrics
@@ -126,6 +126,35 @@ _SANS_CANDIDATES = {
     ],
 }
 
+# Monospace, for fenced code blocks. Base-14 Courier is the floor: it is always
+# available, so a missing mono face degrades the typeface rather than the build.
+_MONO_CANDIDATES = {
+    "regular": [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/google-noto/NotoSansMono-Regular.ttf",
+    ],
+    "bold": [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+        "/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf",
+        "/usr/share/fonts/google-noto/NotoSansMono-Bold.ttf",
+    ],
+}
+
+_MONO_FC = {
+    "regular": [("DejaVu Sans Mono", "Book"), ("Liberation Mono", "Regular"),
+                ("Noto Sans Mono", "Regular"), ("Menlo", "Regular"),
+                ("Courier New", "Regular")],
+    "bold":    [("DejaVu Sans Mono", "Bold"), ("Liberation Mono", "Bold"),
+                ("Noto Sans Mono", "Bold"), ("Menlo", "Bold"),
+                ("Courier New", "Bold")],
+}
+
+# Set by _register_fonts; "Courier" is the base-14 fallback.
+MONO_FONT = "Courier"
+
 _SERIF_FC = {
     "regular":    [("Lora", "Regular"), ("Noto Serif", "Regular"), ("DejaVu Serif", "Book")],
     "bold":       [("Lora", "SemiBold"), ("Noto Serif", "Bold"), ("DejaVu Serif", "Bold")],
@@ -148,6 +177,7 @@ _SANS_FC = {
 }
 
 def _register_fonts():
+    global MONO_FONT
     serif_r = _find_font(_SERIF_CANDIDATES["regular"], _SERIF_FC["regular"])
     serif_b = _find_font(_SERIF_CANDIDATES["bold"], _SERIF_FC["bold"])
     serif_i = _find_font(_SERIF_CANDIDATES["italic"], _SERIF_FC["italic"])
@@ -196,6 +226,19 @@ def _register_fonts():
         italic="DJVSans-Oblique", boldItalic="DJVSans-BoldOblique",
     )
 
+    # Unlike the three above, a missing mono face is not fatal: base-14 Courier
+    # is built into every PDF reader, so code still sets, just less handsomely.
+    mono_r = _find_font(_MONO_CANDIDATES["regular"], _MONO_FC["regular"])
+    mono_b = _find_font(_MONO_CANDIDATES["bold"], _MONO_FC["bold"])
+    if mono_r:
+        pdfmetrics.registerFont(RLTTFont("Mono", mono_r))
+        pdfmetrics.registerFont(RLTTFont("Mono-Bold", mono_b or mono_r))
+        pdfmetrics.registerFontFamily(
+            "Mono", normal="Mono", bold="Mono-Bold",
+            italic="Mono", boldItalic="Mono-Bold",
+        )
+        MONO_FONT = "Mono"
+
 _register_fonts()
 
 # ── Colours ─────────────────────────────────────────────────────────────────
@@ -206,6 +249,7 @@ LIGHT_RULE = colors.HexColor("#d0dde8")
 TABLE_HEAD = colors.HexColor("#2a5c84")
 TABLE_ALT  = colors.HexColor("#f0f4f8")
 QUOTE_BG   = colors.HexColor("#f4f7fa")
+CODE_BG    = colors.HexColor("#f7f9fb")
 MUTED      = colors.HexColor("#555555")
 
 # ── Page setup ──────────────────────────────────────────────────────────────
@@ -280,6 +324,13 @@ styles = {
     "table_cell": S("table_cell",
         fontName="Serif", fontSize=9, leading=12,
         textColor=DARK, alignment=TA_LEFT),
+    "code": S("code",
+        fontName=MONO_FONT, fontSize=8.2, leading=11,
+        textColor=colors.HexColor("#1f2933"),
+        backColor=CODE_BG, borderColor=LIGHT_RULE,
+        borderWidth=0.4, borderPadding=6,
+        spaceBefore=7, spaceAfter=9,
+        allowWidows=0, allowOrphans=0),
 }
 
 toc_styles = {
@@ -331,8 +382,19 @@ def precompute_fnrefs(lines, refs_dict):
     result = {}
     current_section = ""
     occurrence_counts = {}
+    fence_marker = None
     for line in lines:
         stripped = line.strip()
+        # Skip fenced blocks, so a heading-like comment inside one cannot
+        # relabel the section a later back-link points at.
+        if fence_marker is not None:
+            if _fence_close(stripped, fence_marker):
+                fence_marker = None
+            continue
+        m_fence = FENCE_RE.match(line.rstrip('\n'))
+        if m_fence:
+            fence_marker = m_fence.group(2)
+            continue
         if re.match(r'^\[\d+\]\s+', stripped):
             continue
         m = re.match(r'^(#{1,3})\s+(.*)', stripped)
@@ -361,6 +423,9 @@ _FALLBACK_FONTS = [
 
 # char -> font name that can render it. Built once, consulted per paragraph.
 _GLYPH_FALLBACK = {}
+# The same, for code set in MONO_FONT, whose coverage is narrower than the body
+# fonts' and, when it is base-14 Courier, is not introspectable at all.
+_MONO_GLYPH_FALLBACK = {}
 
 
 def _covered(font_name):
@@ -388,17 +453,31 @@ def _init_glyph_fallback():
             if cp > 0x7F and cp not in _GLYPH_FALLBACK:
                 _GLYPH_FALLBACK[cp] = name
 
+    # Code blocks. _covered() returns empty for base-14 Courier, which has no
+    # introspectable face, so everything above ASCII takes a donor -- correct,
+    # since Courier's own coverage stops at WinAnsi and arrows are the very
+    # characters handler pseudocode reaches for.
+    mono = _covered(MONO_FONT)
+    for name in [n for n, _ in _FALLBACK_FONTS] + ["DJVSans", "Serif"]:
+        cov = _covered(name)
+        if not cov:
+            continue
+        for cp in cov - mono:
+            if cp > 0x7F and cp not in _MONO_GLYPH_FALLBACK:
+                _MONO_GLYPH_FALLBACK[cp] = name
+
 
 _init_glyph_fallback()
 
 
-def apply_glyph_fallback(text):
+def apply_glyph_fallback(text, table=None):
     """Wrap characters the body fonts lack in a font that has them."""
-    if not _GLYPH_FALLBACK:
+    table = _GLYPH_FALLBACK if table is None else table
+    if not table:
         return text
     out = []
     for ch in text:
-        font = _GLYPH_FALLBACK.get(ord(ch))
+        font = table.get(ord(ch))
         out.append(f'<font name="{font}">{ch}</font>' if font else ch)
     return "".join(out)
 
@@ -421,15 +500,14 @@ def inline(text, fnref_counter=None, refs_dict=None):
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)
     text = re.sub(r'\*(.+?)\*', r'<i>\1</i>', text)
 
-    text = re.sub(
-        r'\x00CODE(\d+)\x00',
-        lambda m: f'<font name="Courier" size="9">{_spans[int(m.group(1))]}</font>',
-        text,
-    )
-
     def replace_fnref(m):
         num = m.group(1)
-        if refs_dict and num not in refs_dict:
+        # A [N] with no matching definition stays literal text, which is both
+        # what CommonMark says and the only way to avoid emitting a link to a
+        # destination no footnote will ever define. The guard used to apply
+        # only to documents that had at least one footnote, so a document with
+        # none linkified every [N] in it and ReportLab failed the build.
+        if num not in (refs_dict or {}):
             return m.group(0)
         anchor = ''
         if fnref_counter is not None:
@@ -447,7 +525,20 @@ def inline(text, fnref_counter=None, refs_dict=None):
         text
     )
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-    return apply_glyph_fallback(text)
+
+    # Code spans go back in last, after emphasis, footnotes and links have all
+    # run, so that a subscript like `lines[0]` inside backticks is never taken
+    # for a footnote reference. Their content takes the mono coverage table,
+    # not the body one.
+    text = apply_glyph_fallback(text)
+    return re.sub(
+        r'\x00CODE(\d+)\x00',
+        lambda m: '<font name="{}" size="9">{}</font>'.format(
+            MONO_FONT,
+            apply_glyph_fallback(_spans[int(m.group(1))], _MONO_GLYPH_FALLBACK),
+        ),
+        text,
+    )
 
 def parse_table(lines, fnref_counter=None, refs_dict=None):
     rows = []
@@ -527,6 +618,86 @@ def clean_heading(h):
             result.append(w.lower())
     return ' '.join(result)
 
+# ── Fenced code blocks ─────────────────────────────────────────────
+# A fence is matched before every other block rule, because its contents are
+# verbatim: a code line may open with |, #, > or -, and each of those would
+# otherwise be read as a table row, a heading, a quote or a rule. The same
+# precedence is what keeps a subscript like waiting_player_ids[0] from being
+# taken for a footnote reference and emitting a link to a target that no
+# footnote will ever define.
+
+FENCE_RE = re.compile(r'^(\s*)(`{3,}|~{3,})\s*(\S*)\s*$')
+
+
+def _fence_close(stripped, marker):
+    """A closing fence repeats the marker character at least as many times."""
+    if not stripped.startswith(marker[0]):
+        return False
+    run = len(stripped) - len(stripped.lstrip(marker[0]))
+    return run >= len(marker) and not stripped[run:].strip()
+
+
+def _wrap_code_lines(code_lines, style, avail):
+    """Soft-wrap over-long code lines, continuing under the line's own indent.
+
+    Monospace makes this arithmetic rather than measurement, and wrapping beats
+    shrinking the face to fit the worst line in the document: one 114-column
+    line should not set the size of every other block.
+    """
+    pad = style.borderPadding
+    pad = sum(pad[i] for i in (1, 3)) if isinstance(pad, (tuple, list)) else 2 * pad
+    char_w = pdfmetrics.stringWidth("0", style.fontName, style.fontSize) or 1.0
+    cols = max(24, int((avail - pad - 2) / char_w))
+
+    out = []
+    for line in code_lines:
+        line = line.rstrip()
+        if len(line) <= cols:
+            out.append(line)
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        cont = " " * min(indent + 2, max(0, cols - 24))
+        first = True
+        while line:
+            take = cols if first else cols - len(cont)
+            out.append((line[:take] if first else cont + line[:take]))
+            line = line[take:]
+            first = False
+    return out
+
+
+def code_block(code_lines, indent=0):
+    """Build the flowables for one fenced block. Returns [] for an empty one."""
+    body = [ln[indent:] if ln[:indent].strip() == "" else ln.lstrip()
+            for ln in code_lines]
+    while body and not body[0].strip():
+        body.pop(0)
+    while body and not body[-1].strip():
+        body.pop()
+    if not body:
+        return []
+
+    style = styles["code"]
+    wrapped = _wrap_code_lines(body, style, PAGE_W - 2 * MARGIN)
+
+    rendered = []
+    for line in wrapped:
+        # Escape, then substitute fallback fonts, then protect the leading
+        # indent: XPreformatted keeps interior spacing but the paragraph
+        # machinery still trims a line's leading run, and the fallback pass
+        # must not see the non-breaking spaces that protect it.
+        text = apply_glyph_fallback(escape_xml(line), _MONO_GLYPH_FALLBACK)
+        lead = len(line) - len(line.lstrip(" "))
+        if lead:
+            text = "\u00a0" * lead + text.lstrip(" ")
+        rendered.append(text)
+
+    flowable = XPreformatted("\n".join(rendered), style)
+    # A block short enough to fit anywhere should not be orphaned across a page
+    # break; a long one has to be allowed to split or it cannot be laid out.
+    return [KeepTogether(flowable)] if len(rendered) <= 12 else [flowable]
+
+
 # ── Main story builder ──────────────────────────────────────────────────────
 def build_story(md_path):
     with open(md_path) as f:
@@ -574,6 +745,29 @@ def build_story(md_path):
     while i < len(lines):
         raw = lines[i].rstrip('\n')
         stripped = raw.strip()
+
+        # Fenced code, first: see the note above FENCE_RE.
+        fence = FENCE_RE.match(raw)
+        if fence:
+            if in_table:
+                t = parse_table(table_lines, fnref_counter, refs)
+                if t:
+                    story.append(Spacer(1, 6))
+                    story.append(t)
+                    story.append(Spacer(1, 8))
+                in_table = False
+                table_lines = []
+            marker = fence.group(2)
+            indent = len(fence.group(1))
+            body = []
+            i += 1
+            while i < len(lines) and not _fence_close(lines[i].strip(), marker):
+                body.append(lines[i].rstrip('\n'))
+                i += 1
+            i += 1  # consume the closing fence, or run off the end unterminated
+            story.extend(code_block(body, indent))
+            in_cover = False
+            continue
 
         if stripped.startswith('<') and stripped.endswith('>'):
             i += 1

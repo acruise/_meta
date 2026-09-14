@@ -1,7 +1,8 @@
 # docs-render
 
-Markdown to PDF, shared across the cluonflux projects. Pure ReportLab: no
-browser, no LaTeX, no pandoc, and no network at build time.
+Markdown to PDF, shared across the cluonflux projects. The prose path is pure
+ReportLab: no browser, no LaTeX, no pandoc, and no network at build time. Slide
+decks are the exception and go through marp; see `marpify.py` below.
 
     docs/Makefile:
         META_RENDER := ../../_meta/docs-render
@@ -50,6 +51,41 @@ join into their bullet; blockquotes join within a paragraph and honour a bare
 Worth running on a branch or its own commit, and worth diffing the structural
 counts afterwards -- headings, table rows, fences, bullets, blank lines should
 all be identical, and only blockquote line counts should fall.
+
+## marpify.py
+
+Prepares a speaker-notes markdown deck for marp. Set `DECKS` in the consuming
+project's Makefile and those documents build to slides instead of prose:
+
+    docs/Makefile:
+        DECKS         := my-pitch-deck
+        MARPIFY_FLAGS := --drop-preamble
+
+    src/my-pitch-deck.md  ->  target/my-pitch-deck.html   (marp, notes included)
+                          ->  target/my-pitch-deck.pdf    (slides only)
+
+The source convention is a document that reads as prose and presents as slides:
+`---` separates slides, each opens with a `## Title`, and the words to say sit
+under a `**Notes:**` line at the foot of the slide. Marp has no notion of that,
+so it renders the notes onto the slide and they overflow it. marpify rewrites
+each notes block as an HTML comment, which is what marp reads as a presenter
+note, and injects the front matter and a type scale sized for dense tables.
+
+Three details that are easy to get wrong and were:
+
+- **The notes marker must be anchored to a whole line.** A deck that documents
+  its own format says ``a `**Notes:**` section`` in prose, mid-sentence, and
+  converting that one swallows the rest of the slide into a comment.
+- **Slide separators inside fenced code are not separators.** The splitter
+  tracks fences for the same reason render.py's block loop now does.
+- **One intermediate feeds both outputs.** The notes are preserved rather than
+  stripped, so HTML carries them into the presenter view and the PDF, built
+  without `--pdf-notes`, leaves them out. The intermediate `target/%.marp.md`
+  is kept on purpose: it is what marp actually saw.
+
+Unlike everything else here, this shells out to marp, which drives headless
+Chrome. A deck build is therefore neither offline nor fast, which is why only
+the documents named in `DECKS` take that path.
 
 ## Fonts
 
