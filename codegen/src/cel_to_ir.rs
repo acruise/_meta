@@ -827,27 +827,29 @@ mod tests {
 
     /// Field access introduces reads_event_data. The comparison operator
     /// is pure, but its child reads a field, so the transitive closure
-    /// inherits reads_event_data. No enrichment or time coeffects.
+    /// inherits reads_event_data. No time or unknown coeffects.
     #[test]
     fn coeffects_field_access_reads_event() {
         use crate::expr_gen::transitive_coeffects;
         let t = cel_to_log_expr("age > 18").unwrap();
         let c = transitive_coeffects(&t.expr);
         assert!(c.reads_event_data());
-        assert!(!c.reads_enrichment());
+        assert!(!c.is_unknown());
         assert!(!c.reads_current_time());
     }
 
-    /// A CelFallback node conservatively assumes all coeffects -- we don't
-    /// know what the opaque CEL function does, so we assume the worst.
-    /// One CelFallback anywhere in the tree poisons the whole expression.
+    /// A CelFallback node is `Unknown` -- we don't know what the opaque
+    /// CEL function reads, so every may_read query answers yes. One
+    /// CelFallback anywhere in the tree poisons the whole expression.
     #[test]
     fn coeffects_udf_is_conservative() {
         use crate::expr_gen::transitive_coeffects;
-        use crate::coeffects::CoeffectSet;
+        use crate::coeffects::Coeffect;
         let t = cel_to_log_expr("age >= 18 && custom_score(payload)").unwrap();
         let c = transitive_coeffects(&t.expr);
-        assert_eq!(c, CoeffectSet::all());
+        assert!(c.is_unknown());
+        assert!(c.reads_current_time());
+        assert!(c.may_read(&Coeffect::CallsExternalUdf(crate::coeffects::UdfLanguage::Wasm)));
     }
 
     #[test]

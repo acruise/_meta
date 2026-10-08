@@ -181,11 +181,9 @@ impl LogExpr {
         use crate::coeffects::CoeffectSet;
         match self {
             Self::GetFieldByName { .. } | Self::GetFieldByIndex { .. } => CoeffectSet::event_data(),
-            Self::CelFallback { .. } => CoeffectSet::all(),
+            Self::CelFallback { .. } => CoeffectSet::unknown(),
             Self::UnresolvedCall { .. } | Self::ExternalCall { .. } => {
-                let mut s = CoeffectSet::new();
-                s.insert(crate::coeffects::Coeffect::CallsExternalUdf(crate::coeffects::UdfLanguage::Opaque));
-                s
+                CoeffectSet::external_udf(crate::coeffects::UdfLanguage::Opaque)
             },
             Self::CurrentTimestamp { .. } => CoeffectSet::current_time(0),
             _ => CoeffectSet::default(),
@@ -306,3 +304,4 @@ impl LogExpr {
         transitive_coeffects(self).is_pure()
     }
 }
+

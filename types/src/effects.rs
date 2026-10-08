@@ -1,6 +1,16 @@
 use std::collections::HashSet;
+use std::convert::Infallible;
+use std::fmt::Debug;
+use std::hash::Hash;
 
 use crate::value::ValueType;
+
+/// A host-defined effect kind, carried in [`Effect::Ext`]. The effect-side
+/// counterpart of [`crate::coeffects::CoeffectExt`]; `Infallible` is the
+/// "no extensions" domain and the default.
+pub trait EffectExt: Debug + Clone + Eq + Hash {}
+
+impl EffectExt for Infallible {}
 
 /// What an expression may *do* at evaluation time. Dual of coeffects
 /// (which describe what an expression reads). The empty set means
@@ -16,19 +26,18 @@ use crate::value::ValueType;
 /// the type checker a compact view of every error type possible at
 /// any given expression.
 ///
-/// Effect *kinds* (the variant tags here) are meant to be declared in
-/// the function catalog -- the single source of truth, the same as the
-/// IR node set -- as plain string tags; codegen validates that every
-/// per-entry use names a declared kind. A kind's parameter space is not
-/// declared and is open: it is supplied at the use-site, not enumerated
-/// in the catalog. `MayNull` / `MayPartial` / `MayBlock` /
-/// `MayNotConform` / `MayViolateRule` are nullary; `MayError` carries a
-/// `ValueType` that only a concrete site knows. So a kind can be named
-/// up-front while its inhabitants cannot. (Not yet wired through codegen;
-/// see `docs/entity-validation-predicates.md`.)
+/// The kinds here are the ones this crate itself produces (the catalog,
+/// codegen, `crate::validation`). Kinds specific to a consumer go in
+/// `Ext(X)` with a host-defined `X`; a core-only set lifts into a host
+/// domain with [`EffectSet::widen`]. A kind's parameter space is open and
+/// supplied at the use-site: `MayNull` / `MayNotConform` /
+/// `MayViolateRule` are nullary; `MayError` carries a `ValueType` that
+/// only a concrete site knows. So a kind can be named up-front while its
+/// inhabitants cannot. (Not yet wired through codegen; see
+/// `docs/entity-validation-predicates.md`.)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Effect {
-    /// May produce null (nullable field access, empty aggregate window).
+pub enum Effect<X: EffectExt = Infallible> {
+    /// May produce null (nullable field access, empty window).
     MayNull,
     /// May fail at runtime with an error. The `ValueType` is the error's
     /// type when known; `None` means "may error, type not yet determined"
@@ -39,12 +48,6 @@ pub enum Effect {
     /// `{MayError(Some(String)), MayError(Some(I64))}` means the site can
     /// produce either kind of error.
     MayError(Option<ValueType>),
-    /// May produce a result based on incomplete data (aggregate over
-    /// a window that isn't full yet).
-    MayPartial,
-    /// May need to wait for external data before producing a result
-    /// (enrichment with Defer policy).
-    MayBlock,
 
     /// May fail *structural conformance*: a value that does not match its
     /// declared `ValueType` -- wrong variant, missing/extra struct field,
@@ -63,16 +66,38 @@ pub enum Effect {
     /// but invalid" differently (e.g. reject at the wire vs quarantine for
     /// review).
     MayViolateRule,
+
+    /// A host-defined kind.
+    Ext(X),
 }
 
-/// A set of effects. Wraps a `HashSet<Effect>` with convenience
-/// methods for construction and querying.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EffectSet(pub HashSet<Effect>);
+impl<X: EffectExt> Effect<X> {
+    /// Re-key the extension domain, leaving core kinds unchanged.
+    pub fn map_ext<Y: EffectExt>(self, f: impl FnOnce(X) -> Y) -> Effect<Y> {
+        match self {
+            Effect::MayNull => Effect::MayNull,
+            Effect::MayError(t) => Effect::MayError(t),
+            Effect::MayNotConform => Effect::MayNotConform,
+            Effect::MayViolateRule => Effect::MayViolateRule,
+            Effect::Ext(x) => Effect::Ext(f(x)),
+        }
+    }
+}
 
-impl EffectSet {
-    pub fn new() -> Self {
+/// A set of effects. Wraps a `HashSet<Effect<X>>` with convenience
+/// methods for construction and querying.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectSet<X: EffectExt = Infallible>(pub HashSet<Effect<X>>);
+
+impl<X: EffectExt> Default for EffectSet<X> {
+    fn default() -> Self {
         Self(HashSet::new())
+    }
+}
+
+impl<X: EffectExt> EffectSet<X> {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn pure() -> Self {
@@ -83,11 +108,11 @@ impl EffectSet {
         self.0.is_empty()
     }
 
-    pub fn insert(&mut self, e: Effect) {
+    pub fn insert(&mut self, e: Effect<X>) {
         self.0.insert(e);
     }
 
-    pub fn contains(&self, e: &Effect) -> bool {
+    pub fn contains(&self, e: &Effect<X>) -> bool {
         self.0.contains(e)
     }
 
@@ -99,14 +124,6 @@ impl EffectSet {
         self.0.iter().any(|e| matches!(e, Effect::MayError(_)))
     }
 
-    pub fn may_partial(&self) -> bool {
-        self.0.contains(&Effect::MayPartial)
-    }
-
-    pub fn may_block(&self) -> bool {
-        self.0.contains(&Effect::MayBlock)
-    }
-
     pub fn may_not_conform(&self) -> bool {
         self.0.contains(&Effect::MayNotConform)
     }
@@ -115,17 +132,36 @@ impl EffectSet {
         self.0.contains(&Effect::MayViolateRule)
     }
 
-    pub fn union(&self, other: &EffectSet) -> EffectSet {
+    /// The extension kinds in this set.
+    pub fn ext(&self) -> impl Iterator<Item = &X> {
+        self.0.iter().filter_map(|e| match e {
+            Effect::Ext(x) => Some(x),
+            _ => None,
+        })
+    }
+
+    pub fn union(&self, other: &EffectSet<X>) -> EffectSet<X> {
         EffectSet(self.0.union(&other.0).cloned().collect())
     }
 
+    /// Re-key the extension domain of every entry.
+    pub fn map_ext<Y: EffectExt>(self, f: impl Fn(X) -> Y) -> EffectSet<Y> {
+        EffectSet(self.0.into_iter().map(|e| e.map_ext(&f)).collect())
+    }
+
+    pub fn ext_kind(x: X) -> Self {
+        let mut s = Self::new();
+        s.insert(Effect::Ext(x));
+        s
+    }
+
     /// Remove all `MayNull` from the set (e.g. after `Coalesce` consumes it).
-    pub fn without_null(&self) -> EffectSet {
+    pub fn without_null(&self) -> EffectSet<X> {
         EffectSet(self.0.iter().filter(|e| !matches!(e, Effect::MayNull)).cloned().collect())
     }
 
     /// Remove all `MayError(...)` from the set (e.g. after `TryOrElse` consumes them).
-    pub fn without_errors(&self) -> EffectSet {
+    pub fn without_errors(&self) -> EffectSet<X> {
         EffectSet(self.0.iter().filter(|e| !matches!(e, Effect::MayError(_))).cloned().collect())
     }
 
@@ -176,5 +212,13 @@ impl EffectSet {
         let mut s = Self::new();
         s.insert(Effect::MayViolateRule);
         s
+    }
+}
+
+impl EffectSet<Infallible> {
+    /// Lift a core-only set into a host's extension domain. Total:
+    /// `Infallible` has no values.
+    pub fn widen<Y: EffectExt>(self) -> EffectSet<Y> {
+        self.map_ext(|n| match n {})
     }
 }

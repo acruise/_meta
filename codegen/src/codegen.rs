@@ -184,8 +184,38 @@ pub struct CodegenResult {
     pub property_count: usize,
 }
 
+/// Rust constructor expression for a core coeffect tag, assuming
+/// `CoeffectSet` is in scope. `None` for any tag this crate does not own;
+/// a host codegen resolving its own catalog delegates here first and maps
+/// the remaining tags to `Coeffect::Ext(..)` of its own kind enum.
+pub fn core_coeffect_ctor(tag: &str) -> Option<&'static str> {
+    match tag {
+        "reads_event_data" => Some("CoeffectSet::event_data()"),
+        "reads_current_time" => Some("CoeffectSet::current_time(0)"),
+        _ => None,
+    }
+}
+
+/// The shared catalog may only name core coeffect kinds: anything else is
+/// a host kind and belongs in that host's extension catalog.
+fn check_core_coeffects(catalog: &ParsedCatalog) -> Result<(), String> {
+    for e in &catalog.entries {
+        for tag in &e.coeffects {
+            if core_coeffect_ctor(tag).is_none() {
+                let who = e.internal.as_deref().unwrap_or("<unnamed>");
+                return Err(format!(
+                    "catalog entry `{who}` declares coeffect `{tag}`, which is not a core kind; \
+                     declare host-specific kinds in the host's extension catalog"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn generate(yaml: &str, codegen_source: &str) -> Result<CodegenResult, String> {
     let catalog = parse_catalog(yaml)?;
+    check_core_coeffects(&catalog)?;
     let scalars = catalog.scalars();
     let with_properties = catalog.with_properties();
     let hofs = catalog.hofs();
@@ -336,11 +366,9 @@ fn emit_intrinsic_coeffects(
     writeln!(out, "        match self {{").unwrap();
 
     writeln!(out, "            Self::GetFieldByName {{ .. }} | Self::GetFieldByIndex {{ .. }} => CoeffectSet::event_data(),").unwrap();
-    writeln!(out, "            Self::CelFallback {{ .. }} => CoeffectSet::all(),").unwrap();
+    writeln!(out, "            Self::CelFallback {{ .. }} => CoeffectSet::unknown(),").unwrap();
     writeln!(out, "            Self::UnresolvedCall {{ .. }} | Self::ExternalCall {{ .. }} => {{").unwrap();
-    writeln!(out, "                let mut s = CoeffectSet::new();").unwrap();
-    writeln!(out, "                s.insert(crate::coeffects::Coeffect::CallsExternalUdf(crate::coeffects::UdfLanguage::Opaque));").unwrap();
-    writeln!(out, "                s").unwrap();
+    writeln!(out, "                CoeffectSet::external_udf(crate::coeffects::UdfLanguage::Opaque)").unwrap();
     writeln!(out, "            }},").unwrap();
 
     for e in scalars.iter().chain(property_ops.iter()).chain(hofs.iter()) {
@@ -349,23 +377,12 @@ fn emit_intrinsic_coeffects(
         }
         let name = e.internal.as_ref().unwrap();
         // Build a chain of union() calls from the declared coeffects
-        let mut parts: Vec<String> = Vec::new();
-        if e.coeffects.contains(&"reads_event_data".to_string()) {
-            parts.push("CoeffectSet::event_data()".to_string());
-        }
-        if e.coeffects.contains(&"reads_current_time".to_string()) {
-            parts.push("CoeffectSet::current_time(0)".to_string());
-        }
-        if e.coeffects.contains(&"reads_aggregates".to_string()) {
-            parts.push("CoeffectSet::aggregates()".to_string());
-        }
-        if e.coeffects.contains(&"reads_enrichment".to_string()) {
-            parts.push("CoeffectSet::enrichment()".to_string());
-        }
-        if parts.is_empty() {
-            continue;
-        }
-        let expr = parts.into_iter().reduce(|a, b| format!("{a}.union({b})")).unwrap();
+        // (all core; check_core_coeffects rejected anything else).
+        let expr = e.coeffects.iter()
+            .filter_map(|t| core_coeffect_ctor(t))
+            .map(str::to_string)
+            .reduce(|a, b| format!("{a}.union({b})"))
+            .unwrap();
         writeln!(out, "            Self::{name} {{ .. }} => {expr},").unwrap();
     }
 
@@ -518,4 +535,31 @@ fn emit_is_foldable(out: &mut String) {
     writeln!(out, "    }}").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ENTRY: &str = "\
+- id: now
+  internal: CurrentTimestamp
+  status: mapped
+  params: []
+  return: timestamp
+  coeffects: [TAG]
+";
+
+    #[test]
+    fn core_coeffect_tags_accepted() {
+        let yaml = ENTRY.replace("TAG", "reads_current_time");
+        assert!(check_core_coeffects(&parse_catalog(&yaml).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn host_coeffect_tags_rejected() {
+        let yaml = ENTRY.replace("TAG", "reads_some_host_state");
+        let err = check_core_coeffects(&parse_catalog(&yaml).unwrap()).unwrap_err();
+        assert!(err.contains("reads_some_host_state"), "{err}");
+    }
 }

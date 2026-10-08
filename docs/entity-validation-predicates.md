@@ -85,14 +85,16 @@ Adding `MayNotConform` / `MayViolateRule` exposed a seam worth naming, because i
 
 The kinds belong in the catalog -- the same single-source-of-truth argument that puts the IR node set there. They are just **string tags**; codegen validates that every per-entry use names a declared kind when it generates from the catalog. The reason a bare string is the right representation, and not a richer typed declaration, is that **a kind's parameter space is open and not knowable up-front**. You can name the kinds; you cannot enumerate their inhabitants:
 
-- Nullary kinds -- `may_null`, `may_partial`, `may_block`, `may_not_conform`, `may_violate_rule`, `reads_event_data`, `reads_aggregates`, `reads_enrichment` -- have no parameter; the tag is the whole story.
+- Nullary kinds -- `may_null`, `may_not_conform`, `may_violate_rule`, `reads_event_data` -- have no parameter; the tag is the whole story.
 - Open-parameterized kinds -- `may_error` (a `ValueType`), `reads_current_time` (a `TimeGranularity`), `calls_external_udf` (a `UdfLanguage`) -- carry a value that only a concrete site knows. The catalog does not try to describe that parameter; the value is supplied where the effect is realized (per expression, per config). The string tag is all the catalog declares.
 
 So the declaration is just a list of kind strings, e.g.:
 
 ```yaml
-effect_kinds: [may_null, may_error, may_partial, may_block, may_not_conform, may_violate_rule]
-coeffect_kinds: [reads_event_data, reads_current_time, reads_aggregates, reads_enrichment, calls_external_udf]
+effect_kinds: [may_null, may_error, may_not_conform, may_violate_rule]
+coeffect_kinds: [reads_event_data, reads_current_time, calls_external_udf]
 ```
+
+These lists hold only the kinds this crate itself produces. A consuming project's own kinds (reads of its state stores, caches, partial windows, ...) live in that project's extension catalog and reach the runtime through the `Ext(X)` slot on `Coeffect` / `Effect`, with `X` a project-defined enum. Today codegen already rejects any non-core coeffect tag in the shared catalog and exports `core_coeffect_ctor` for a host codegen to delegate to.
 
 Wiring is deferred. When codegen grows to consume these, it validates the per-entry `coeffects: [...]` (and a future `effects: [...]`) against the declared kind strings, replacing the hardcoded string match in `codegen.rs`. Where these lists physically live -- a top-level section of `function-catalog.yaml` (today a bare list) versus a sibling kinds catalog fed alongside it -- is a catalog-format call to make at that point, not now.
