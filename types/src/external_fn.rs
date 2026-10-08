@@ -88,6 +88,56 @@ impl<T: ProtoSerde> ProtoSerde for Option<T> {
     }
 }
 
+// Narrow integers and f32.
+//
+// `EncodedValue` already carries these: the proto notes that `int_value` covers
+// I8 through I64 and `uint_value` covers U8 through U64, so the wire form was
+// never the gap. What was missing were the Rust impls, which meant a type could
+// have a `ValueType` the value model admits and no way to encode it.
+//
+// Decode is RANGE CHECKED rather than truncating. An i64 that does not fit an
+// i32 is a decode failure, not a smaller number: silently narrowing produces a
+// plausible wrong answer, and the whole point of the boundary is that a value
+// arriving from elsewhere is not trusted to fit.
+macro_rules! narrow_int {
+    ($($rust:ty => $kind:ident),* $(,)?) => {
+        $(impl ProtoSerde for $rust {
+            fn decode(v: &pb::EncodedValue) -> Option<Self> {
+                match &v.kind {
+                    Some(Kind::$kind(n)) => (*n).try_into().ok(),
+                    _ => None,
+                }
+            }
+            fn encode(&self) -> pb::EncodedValue {
+                pb::EncodedValue { kind: Some(Kind::$kind((*self).into())) }
+            }
+        })*
+    };
+}
+
+narrow_int! {
+    i8 => IntValue,
+    i16 => IntValue,
+    i32 => IntValue,
+    u8 => UintValue,
+    u16 => UintValue,
+    u32 => UintValue,
+}
+
+// f32 widens to f64 exactly and narrows back exactly only for values that
+// originated as f32. A double carrying more precision than an f32 can hold is
+// accepted and rounded, which is the ordinary IEEE contract rather than a
+// truncation bug, but it does mean f32 is not bitwise round-trip safe against
+// arbitrary f64 input.
+impl ProtoSerde for f32 {
+    fn decode(v: &pb::EncodedValue) -> Option<Self> {
+        match &v.kind { Some(Kind::FloatValue(n)) => Some(*n as f32), _ => None }
+    }
+    fn encode(&self) -> pb::EncodedValue {
+        pb::EncodedValue { kind: Some(Kind::FloatValue(*self as f64)) }
+    }
+}
+
 impl ProtoSerde for Vec<u8> {
     fn decode(v: &pb::EncodedValue) -> Option<Self> {
         match &v.kind { Some(Kind::BytesValue(b)) => Some(b.clone()), _ => None }
@@ -509,5 +559,29 @@ mod tests {
         assert_eq!(e.params.len(), 1);
         assert_eq!(e.params[0].name, "x");
         assert_eq!(e.return_type, ValueType::Bool);
+    }
+}
+
+#[cfg(test)]
+mod narrow_tests {
+    use super::*;
+
+    #[test]
+    fn narrow_integers_round_trip() {
+        assert_eq!(i32::decode(&(-7i32).encode()), Some(-7i32));
+        assert_eq!(u16::decode(&40_000u16.encode()), Some(40_000u16));
+        assert_eq!(i8::decode(&(-128i8).encode()), Some(-128i8));
+    }
+
+    #[test]
+    fn an_out_of_range_value_fails_rather_than_truncating() {
+        let too_big = pb::EncodedValue { kind: Some(Kind::IntValue(i64::from(i32::MAX) + 1)) };
+        assert_eq!(
+            i32::decode(&too_big),
+            None,
+            "narrowing silently would produce a plausible wrong answer"
+        );
+        let negative = pb::EncodedValue { kind: Some(Kind::UintValue(u64::from(u32::MAX) + 1)) };
+        assert_eq!(u32::decode(&negative), None);
     }
 }

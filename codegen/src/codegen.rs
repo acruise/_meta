@@ -46,6 +46,22 @@ pub struct LambdaSpec {
 pub struct SubstraitRef {
     pub ext: String,
     pub name: String,
+
+    /// Which Substrait releases this mapping is claimed for.
+    ///
+    /// `None` means the claim is unsubscripted: it applies to every release in
+    /// the `compatibility_matrix` of `substrait-compat.yaml`, and to nothing
+    /// outside it. `Some(list)` narrows the claim to those releases only, for a
+    /// mapping that holds across part of the matrix and not the rest -- a
+    /// rename, a signature change, an option that became an argument.
+    ///
+    /// Nothing in codegen consumes this yet; it is carried so the catalog can
+    /// express the narrowing and so `EXPR_GEN_HASH` moves when one is added or
+    /// changed. A subscript is a semantic-only edit that leaves `LogExpr`
+    /// byte-identical, which is exactly the drift class the hash guard exists
+    /// for.
+    #[serde(default)]
+    pub versions: Option<Vec<String>>,
 }
 
 impl CatalogEntry {

@@ -1,0 +1,95 @@
+# The Substrait compatibility matrix for function-catalog.yaml.
+#
+# This file is the authoritative, machine-readable answer to "which Substrait
+# releases does the catalog's `substrait:` column claim anything about". The
+# catalog's own header states the reading rule and deliberately does not repeat
+# the version list, so there is exactly one place for it to be wrong.
+#
+# The reading rule, restated here because it is the whole point of the file:
+#
+#   An unsubscripted `substrait: { ext, name }` tag asserts compatibility with
+#   EVERY release in `compatibility_matrix` below, and asserts NOTHING about any
+#   release outside it. It is not a claim of permanence. A tag carrying
+#   `versions: [...]` narrows to those releases only, and every version it names
+#   must appear in the matrix.
+#
+# The column was originally curated without naming a release, on the assumption
+# that Substrait was stable enough for "the Substrait name for this" to be a
+# version-free fact. That assumption is no longer safe: names, signatures, and
+# option encodings move between releases, and a mapping that silently means
+# "whatever Substrait looked like when someone wrote this line" is a mapping
+# nobody can check.
+#
+# _meta does not vendor Substrait. Each consumer vendors the release it targets
+# and runs the checker against its own tree, so this file records results rather
+# than owning evidence. Adding a release to the matrix means running the checker
+# against it and recording a `verified_against` block; a release in the matrix
+# with no such block is a claim nobody has tested.
+
+# The matrix. Adding an entry here re-scopes every unsubscripted tag in the
+# catalog, which is why it is a short list that grows deliberately.
+compatibility_matrix:
+  - v0.103.0
+
+curated_under:
+  note: >
+    Original curation, through 2026-04, named no Substrait release. Entries
+    written in that period carry an implicit claim only. The 0.103.0 block below
+    is the first time the whole column was mechanically checked; it passed at the
+    name level, which retroactively bounds how far the undeclared era drifted.
+
+verified_against:
+  - release: v0.103.0
+    commit: f3667cc01f8d37236fad4b0e28981bcaf4f21a48
+    checked: 2026-08-30
+    checked_by: trabecula tools/check_substrait_compat.py
+    extensions_vendored_at: trabecula proto/vendor/substrait-0.103.0/extensions
+    result:
+      claims: 161
+      resolved_by_name: 161
+      unresolved: 0
+      arity_divergence: 8       # see known_divergence below
+      arity_unchecked: 86       # entry declares no params:
+    coverage:
+      # Extensions present in the release that the catalog never references.
+      # Not gaps to close by reflex; each is a scope decision.
+      unreferenced:
+        - functions_geometry
+        - functions_arithmetic_decimal
+        - functions_aggregate_decimal_output
+        - functions_rounding_decimal
+        - unsigned_integers
+
+# Entries where the catalog and the release disagree on signature after the
+# checker normalizes for the catalog's own conventions (variadic, receiver,
+# lambda). Every one of these is the same shape: Substrait models a behavioral
+# choice as an enum-typed argument, and the catalog leaves it implicit. That is
+# under-specification here rather than an error upstream, and it is exactly the
+# class that would produce a wrong answer through a round trip -- a rounding mode
+# or an extract component silently defaulting on the way across.
+known_divergence:
+  - { id: timestamp_extract,   substrait: functions_datetime.extract,         reason: component selector is an argument upstream }
+  - { id: round,               substrait: functions_rounding.round,           reason: rounding mode is an argument upstream }
+  - { id: round_temporal,      substrait: functions_datetime.round_temporal,  reason: unit and rounding mode are arguments upstream }
+  - { id: round_calendar,      substrait: functions_datetime.round_calendar,  reason: unit and rounding mode are arguments upstream }
+  - { id: trim,               substrait: functions_string.trim,               reason: trim character set is an argument upstream }
+  - { id: current_timestamp,   substrait: functions_datetime.local_timestamp, reason: precision and timezone are arguments upstream }
+  - { id: agg_median,          substrait: functions_arithmetic.median,        reason: interpolation option is an argument upstream }
+  - { id: agg_percentile,      substrait: functions_arithmetic.quantile,      reason: quantile count and interpolation are arguments upstream }
+
+# Metadata the release declares that this catalog does not carry. Recorded here
+# because a consumer wanting it should read it from the vendored release rather
+# than have it hand-copied into a second place where it can rot independently.
+available_upstream_not_carried_here:
+  - field: decomposable
+    where: aggregate function impls
+    values: [MANY, ONE, NONE]
+    entries_affected: 20
+    note: >
+      MANY on sum/min/max/avg/product, NONE on median/quantile/std_dev/variance.
+      Coarser than some consumers need -- it collapses associativity with
+      exactness, so fp64 sum reads MANY -- but it is upstream's own statement and
+      should be sourced from upstream.
+  - field: intermediate
+    where: aggregate function impls
+    note: the intermediate accumulator type, e.g. STRUCT<fp64,i64> for avg.

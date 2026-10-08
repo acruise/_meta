@@ -1,0 +1,92 @@
+# Substrait v0.103.0 -- file manifest.
+#
+# One of these exists per release named in `compatibility_matrix` in
+# ../../substrait-compat.yaml. A matrix entry with no manifest directory here is
+# an error: the matrix would be claiming compatibility with a release whose
+# bytes nobody pinned.
+#
+# Why this file exists. The Substrait project publishes releases and moves tags,
+# and does not itself provide per-file content hashes that a downstream consumer
+# can pin against. So the discipline has to live on this side. Every file the
+# function and type catalogs rely on is listed below with the URL it came from,
+# the commit that URL is pinned to, and the sha256 of its content. A consumer
+# vendors the bytes and verifies them against this manifest; nothing downstream
+# should ever trust a tag, a release tarball checksum, or "whatever is in the
+# vendor directory".
+#
+# Deliberately NOT a gate: the GitHub release tarball checksum. GitHub's
+# auto-generated archives are not byte-stable over time -- the compression
+# settings have changed at least once -- so an archive hash that stops matching
+# tells you nothing. Per-file hashes of the extracted content are stable.
+#
+# What lives where. _meta pins metadata and nothing else: this manifest holds
+# paths, upstream URLs, a commit, and content hashes, and _meta never vendors a
+# byte of Substrait. Vendoring the actual files is a consumer's job, done once
+# per release the consumer targets, and the consumer verifies its tree against
+# this manifest. That keeps the substrate small and keeps one authoritative
+# statement of what a release contains, instead of N copies of the bytes drifting
+# apart in N repositories.
+#
+# This manifest is machine-readable so the codegen paranoia can consume it if it
+# wants to fold the substrate's Substrait pin into its own hash chain. Whether
+# or not it does, the manifest must agree with the central registries as a
+# matter of course: every extension file referenced by a `substrait: { ext }`
+# tag in function-catalog.yaml, and every extension backing a type-catalog
+# mapping, has to appear below. `check_substrait_compat.py` enforces that
+# direction, so an entry pointing at an extension nobody pinned fails loudly
+# rather than resolving against whatever happens to be on disk.
+
+release: v0.103.0
+commit: f3667cc01f8d37236fad4b0e28981bcaf4f21a48
+source: https://github.com/substrait-io/substrait
+license: Apache-2.0
+retrieved: 2026-08-30
+url_template: https://raw.githubusercontent.com/substrait-io/substrait/f3667cc01f8d37236fad4b0e28981bcaf4f21a48/{upstream}
+
+# Substrait's own buf configuration, vendored so the proto tree can be linted
+# and built the way upstream builds it.
+build_config:
+  - { path: buf.lock, upstream: proto/buf.lock, sha256: 3847a1487162ea0014a292460405ee719432a620b658c03092c9a10e059eb225, bytes: 45 }
+  - { path: buf.yaml, upstream: proto/buf.yaml, sha256: 689b5820f42aeb3468a67811fad23a8a9960f12a8b18cb1bbb0a2149cd4f374b, bytes: 165 }
+
+# The wire model. proto/trabecula/*.proto compiles against these.
+protos:
+  - { path: substrait/algebra.proto, upstream: proto/substrait/algebra.proto, sha256: 6a6d093745440804a1f296f8a8f46f6dae1ffab63acf2bda1d8c6996f4e6ec2d, bytes: 75509 }
+  - { path: substrait/extended_expression.proto, upstream: proto/substrait/extended_expression.proto, sha256: ebbb22a0dd997fde18a4dc3df7d4dd67a6c1b6477e098830c4c7451320503fbb, bytes: 1902 }
+  - { path: substrait/extensions/extensions.proto, upstream: proto/substrait/extensions/extensions.proto, sha256: 0eea193ab1a0afcd008fa636fbd325b43d3faf068e9c646533d4a468dc8537f2, bytes: 2945 }
+  - { path: substrait/plan.proto, upstream: proto/substrait/plan.proto, sha256: 455d91fe95fd74c06c1c9d15268130676dd844062d4f8a77fdd3d018e4c6d0cf, bytes: 5260 }
+  - { path: substrait/type.proto, upstream: proto/substrait/type.proto, sha256: e947854475631d08ff711e6416a3bed7d7c378575539163d0bea5f768873179e, bytes: 8579 }
+
+# The function extension catalogs. These are what the `substrait:` column in
+# function-catalog.yaml actually resolves against: declared signatures, null
+# handling, decimal behavior, and the aggregate `decomposable`/`intermediate`
+# metadata. A mapping is only checkable because these are pinned.
+extensions:
+  - { path: extensions/functions_aggregate_approx.yaml, upstream: extensions/functions_aggregate_approx.yaml, sha256: 65b48ed8ac77465dc4d568e000aa17fbf6aaa1e52e27ed2a790af18f19ac52ea, bytes: 777 }
+  - { path: extensions/functions_aggregate_decimal_output.yaml, upstream: extensions/functions_aggregate_decimal_output.yaml, sha256: e0de02e75b9de8a23857f8f3c3cfdd1dbefe0f2bab5c8ca8ed687a6995e1ba72, bytes: 1586 }
+  - { path: extensions/functions_aggregate_generic.yaml, upstream: extensions/functions_aggregate_generic.yaml, sha256: 1c9f1e105f393e7f4101e38b7d128410f37414dee82f02e55121be61176c77b9, bytes: 1178 }
+  - { path: extensions/functions_arithmetic.yaml, upstream: extensions/functions_arithmetic.yaml, sha256: 278e62f76a7a1cada90f65bc60b940bfb0bcb8a7ce8d1d80ce780f6bc18c15f7, bytes: 57055 }
+  - { path: extensions/functions_arithmetic_decimal.yaml, upstream: extensions/functions_arithmetic_decimal.yaml, sha256: e69954e4b513b67c043f808095faafd7db04dec261bd0466d588be7c96f018d9, bytes: 7651 }
+  - { path: extensions/functions_boolean.yaml, upstream: extensions/functions_boolean.yaml, sha256: 06f74ccf3495e607055c20b9c9992e141d7f4a77cd6d0944f6a2dfe7d53cb7f8, bytes: 3286 }
+  - { path: extensions/functions_comparison.yaml, upstream: extensions/functions_comparison.yaml, sha256: b2f3f9bb4bcc0d4a66aaba30b9bf8e67a96fd0ae3402da1dfe46dc286419b853, bytes: 8023 }
+  - { path: extensions/functions_datetime.yaml, upstream: extensions/functions_datetime.yaml, sha256: ad5303bfd64e4807b6492b623e3391e888932a13f4fec431eb27d38da32eba74, bytes: 29491 }
+  - { path: extensions/functions_geometry.yaml, upstream: extensions/functions_geometry.yaml, sha256: 28b07c818c18d6ed084f5a0774de1d5976089a22c3555469c30d9ca9b6983dd0, bytes: 7094 }
+  - { path: extensions/functions_list.yaml, upstream: extensions/functions_list.yaml, sha256: 866a4a84a17e2e944d613163d1fb289edffc0e6a92e061c10b936764d5886735, bytes: 4493 }
+  - { path: extensions/functions_logarithmic.yaml, upstream: extensions/functions_logarithmic.yaml, sha256: a634f8afc15053f57e288b80b892d082611ad7ecd62477b8996685609951f53e, bytes: 7812 }
+  - { path: extensions/functions_rounding.yaml, upstream: extensions/functions_rounding.yaml, sha256: bfe9adaa42a60e5976c101e0aeb2c6224a6fb0a70d0f68144c9f1a3942d140bc, bytes: 11554 }
+  - { path: extensions/functions_rounding_decimal.yaml, upstream: extensions/functions_rounding_decimal.yaml, sha256: 418159a1e0e94394c5bcf1ef2448750f4ea655d5b18855dc2a1902926a962101, bytes: 3148 }
+  - { path: extensions/functions_set.yaml, upstream: extensions/functions_set.yaml, sha256: 28ecc2a4adc023ccf668532bd8abdf2b32755cf67d923244281aa796416713c1, bytes: 810 }
+  - { path: extensions/functions_string.yaml, upstream: extensions/functions_string.yaml, sha256: 8dafa67eada535805871d6024a185b92288dd6a90106cffc38f941a3b5657222, bytes: 58741 }
+  - { path: extensions/unsigned_integers.yaml, upstream: extensions/unsigned_integers.yaml, sha256: a031305d3fef540b0723e4700b4b822a5872ca57bcb7a0def31bf1b6ec1e6fe1, bytes: 7810 }
+
+# Upstream files deliberately not pinned, so their absence reads as a decision
+# rather than an oversight.
+excluded:
+  - path: site/examples/extensions/*.yaml
+    reason: documentation samples, not normative extension definitions
+  - path: the release tarball
+    reason: GitHub archive bytes are not stable over time; see the header
+
+summary:
+  files: 23
+  bytes: 304914
