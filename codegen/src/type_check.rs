@@ -23,7 +23,7 @@ impl From<&meta_types::external_fn::UdfCatalogEntry> for ExternalUdfMeta {
 }
 
 const _: () = assert!(
-    crate::expr_gen::EXPR_GEN_HASH == 0x6d48f2ef0066e5f2,
+    crate::expr_gen::EXPR_GEN_HASH == 0xc434780decfca982,
     "type_check.rs needs review — EXPR_GEN_HASH changed"
 );
 
