@@ -36,6 +36,11 @@ pub enum Coeffect<X: CoeffectExt = Infallible> {
     /// Reads the current time at a given granularity. Result is stable
     /// within the interval; must re-evaluate when it elapses.
     ReadsCurrentTime(TimeGranularity),
+    /// Reads the variable bound by an enclosing higher-order function. The
+    /// binding HOF discharges it, so an expression with this coeffect is an
+    /// open term: meaningful only inside its binder, and never to be
+    /// evaluated, cached, or materialized outside it.
+    ReadsBinding(String),
     /// Calls an external UDF. The language determines what is known about the
     /// call without anybody attesting to anything; see `UdfLanguage`.
     CallsExternalUdf(UdfLanguage),
@@ -56,6 +61,7 @@ impl<X: CoeffectExt> Coeffect<X> {
         match self {
             Coeffect::ReadsEventData => Coeffect::ReadsEventData,
             Coeffect::ReadsCurrentTime(g) => Coeffect::ReadsCurrentTime(g),
+            Coeffect::ReadsBinding(n) => Coeffect::ReadsBinding(n),
             Coeffect::CallsExternalUdf(l) => Coeffect::CallsExternalUdf(l),
             Coeffect::Unknown => Coeffect::Unknown,
             Coeffect::Ext(x) => Coeffect::Ext(f(x)),
@@ -169,6 +175,18 @@ impl<X: CoeffectExt> CoeffectSet<X> {
         self.is_unknown() || self.0.iter().any(|c| matches!(c, Coeffect::ReadsCurrentTime(_)))
     }
 
+    /// Whether this set reads any bound variable, i.e. denotes an open term.
+    pub fn reads_any_binding(&self) -> bool {
+        self.0.iter().any(|c| matches!(c, Coeffect::ReadsBinding(_)))
+    }
+
+    /// Remove a binding read, as the higher-order function binding `name`
+    /// does for its body.
+    pub fn without_binding(mut self, name: &str) -> Self {
+        self.0.retain(|c| !matches!(c, Coeffect::ReadsBinding(n) if n == name));
+        self
+    }
+
     /// The extension kinds in this set. Does not account for `Unknown`;
     /// check [`is_unknown`](Self::is_unknown) separately.
     pub fn ext(&self) -> impl Iterator<Item = &X> {
@@ -198,6 +216,10 @@ impl<X: CoeffectExt> CoeffectSet<X> {
 
     pub fn current_time_with_offset(interval_ms: u64, offset_ms: u64) -> Self {
         Self::of(Coeffect::ReadsCurrentTime(TimeGranularity::new(interval_ms, offset_ms)))
+    }
+
+    pub fn reads_binding(name: impl Into<String>) -> Self {
+        Self::of(Coeffect::ReadsBinding(name.into()))
     }
 
     pub fn external_udf(lang: UdfLanguage) -> Self {

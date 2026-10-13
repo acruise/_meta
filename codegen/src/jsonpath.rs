@@ -32,9 +32,7 @@
 //! both are present and ordered (`LessThan` yields null, hence false, for
 //! values that are not both numbers or both strings).
 //!
-//! Known deviations, pending the evaluator:
-//! - `length()` of a value that is not a string, array or object yields null
-//!   where the RFC yields Nothing. Only `length(..) == null` can observe it.
+//! Known deviation:
 //! - A regex given as a parameter or query (not a string literal) is passed
 //!   to the regex engine as written; a literal is translated from I-Regexp
 //!   (`.` excludes CR and LF, and `match()` anchors the whole string).
@@ -74,7 +72,7 @@ impl std::error::Error for JsonPathError {}
 pub fn jsonpath_to_log_expr(src: &str) -> Result<JsonPathTranslation, JsonPathError> {
     let query = Parser { src, pos: 0 }.parse_query_document()?;
     let mut t = Translator { next_var: 1, params: Vec::new(), current: Vec::new() };
-    let expr = t.query(&query);
+    let expr = crate::bindings::canonicalize_bindings(&t.query(&query));
     Ok(JsonPathTranslation { expr, params: t.params })
 }
 
@@ -1047,14 +1045,21 @@ impl Translator {
                     else_expr: b(empty()),
                 })
             }
-            Func::Length => match self.opt(&c.args[0]) {
-                Opt::Present(v) => Opt::Present(size(v)),
-                Opt::Maybe(l) => Opt::Maybe(LogExpr::Conditional {
-                    condition: b(size_is(l.clone(), 1)),
-                    then_expr: b(singleton(size(first(l)))),
+            // Nothing unless the argument is present and has a length (a
+            // string, array, or object); `size` of anything else is null.
+            Func::Length => {
+                let (present, v) = match self.opt(&c.args[0]) {
+                    Opt::Present(v) => (None, v),
+                    Opt::Maybe(l) => (Some(size_is(l.clone(), 1)), first(l)),
+                };
+                let n = size(v);
+                let has_length = LogExpr::IsNotNull { operand: b(n.clone()) };
+                Opt::Maybe(LogExpr::Conditional {
+                    condition: b(conj([present], has_length)),
+                    then_expr: b(singleton(n)),
                     else_expr: b(empty()),
-                }),
-            },
+                })
+            }
             Func::Match | Func::Search => unreachable!("logical function in value position"),
         }
     }
@@ -1163,14 +1168,16 @@ mod tests {
 
     #[test]
     fn later_segments_flat_map() {
+        // Written with a raw binder name; the translation's binders are
+        // canonical, so compare against the canonicalized form.
         let expected = LogExpr::Flatten {
             operand: b(LogExpr::MapTransform {
                 collection: b(member(var(ROOT), "a")),
-                binding: "$1".into(),
-                body: b(member(var("$1"), "b")),
+                binding: "v".into(),
+                body: b(member(var("v"), "b")),
             }),
         };
-        assert_eq!(tr("$.a.b"), expected);
+        assert_eq!(tr("$.a.b"), crate::bindings::canonicalize_bindings(&expected));
     }
 
     #[test]
@@ -1195,10 +1202,10 @@ mod tests {
     fn filter_binds_current_node() {
         match tr("$[?@.x]") {
             LogExpr::Filter { binding, body, .. } => {
-                assert_eq!(binding, "$1");
+                let at = LogExpr::GetBinding { binding_name: binding.clone() };
                 assert_eq!(
                     *body,
-                    LogExpr::GreaterThan { lhs: b(size(member(var("$1"), "x"))), rhs: b(int(0)) }
+                    LogExpr::GreaterThan { lhs: b(size(member(at, "x"))), rhs: b(int(0)) }
                 );
             }
             other => panic!("expected Filter, got {other:?}"),

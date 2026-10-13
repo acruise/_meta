@@ -1500,6 +1500,20 @@
 #  _meta-SPECIFIC (no CEL or Substrait equivalent)
 # ═══════════════════════════════════════════════════════════════════════
 
+- id: get_binding
+  internal: GetBinding
+  status: mapped
+  notes: >
+    Reference to a variable bound by an enclosing higher-order function
+    (map, filter, all, exists, exists_one). Distinct from get_field_by_name,
+    so a bound variable is never mistaken for an event field. Frontends name
+    binders canonically, after what they range over (see
+    codegen::bindings), so two references are the same node only when they
+    denote the same variable.
+  params: []
+  return: T
+  properties: { binding_name: string }
+
 - id: get_field_by_name
   internal: GetFieldByName
   status: mapped

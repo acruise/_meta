@@ -165,6 +165,7 @@ pub enum LogExpr {
     IntToIp { operand: Box<LogExpr> },
 
     JsonParseAs { target_type: meta_types::type_syntax::TypeLiteral, operand: Box<LogExpr> },
+    GetBinding { binding_name: String },
     GetFieldByName { field_name: String },
     GetFieldByIndex { field_index: u32 },
     GetChildByName { child_name: String, operand: Box<LogExpr> },
@@ -200,6 +201,7 @@ impl LogExpr {
         use crate::coeffects::CoeffectSet;
         match self {
             Self::GetFieldByName { .. } | Self::GetFieldByIndex { .. } => CoeffectSet::event_data(),
+            Self::GetBinding { binding_name } => CoeffectSet::reads_binding(binding_name.clone()),
             Self::CelFallback { .. } => CoeffectSet::unknown(),
             Self::UnresolvedCall { .. } | Self::ExternalCall { .. } => {
                 CoeffectSet::external_udf(crate::coeffects::UdfLanguage::Opaque)
@@ -228,7 +230,7 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
     let mut result = expr.intrinsic_coeffects();
     match expr {
         LogExpr::Literal(_) => {},
-        LogExpr::GetFieldByName { .. } | LogExpr::GetFieldByIndex { .. } | LogExpr::CurrentTimestamp => {},
+        LogExpr::GetFieldByName { .. } | LogExpr::GetFieldByIndex { .. } | LogExpr::GetBinding { .. } | LogExpr::CurrentTimestamp => {},
         LogExpr::LogicalNot { operand } | LogExpr::Negate { operand }
         | LogExpr::IsNull { operand } | LogExpr::IsNotNull { operand }
         | LogExpr::IsNan { operand } | LogExpr::IsFinite { operand } | LogExpr::IsInfinite { operand }
@@ -299,12 +301,12 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
             result = result.union(transitive_coeffects(lhs));
             result = result.union(transitive_coeffects(rhs));
         },
-        LogExpr::All { collection, body, .. } | LogExpr::Exists { collection, body, .. }
-        | LogExpr::ExistsOne { collection, body, .. } | LogExpr::Filter { collection, body, .. }
-        | LogExpr::MapTransform { collection, body, .. }
+        LogExpr::All { collection, binding, body } | LogExpr::Exists { collection, binding, body }
+        | LogExpr::ExistsOne { collection, binding, body } | LogExpr::Filter { collection, binding, body }
+        | LogExpr::MapTransform { collection, binding, body }
         => {
             result = result.union(transitive_coeffects(collection));
-            result = result.union(transitive_coeffects(body));
+            result = result.union(transitive_coeffects(body).without_binding(binding));
         },
         LogExpr::CelFallback { args, .. } | LogExpr::UnresolvedCall { args, .. } | LogExpr::ExternalCall { args, .. } => {
             for arg in args {
@@ -430,6 +432,7 @@ impl LogExpr {
             Self::IpToInt { operand, .. } => vec![operand.as_mut()],
             Self::IntToIp { operand, .. } => vec![operand.as_mut()],
             Self::JsonParseAs { operand, .. } => vec![operand.as_mut()],
+            Self::GetBinding { .. } => vec![],
             Self::GetFieldByName { .. } => vec![],
             Self::GetFieldByIndex { .. } => vec![],
             Self::GetChildByName { operand, .. } => vec![operand.as_mut()],

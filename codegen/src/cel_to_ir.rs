@@ -53,7 +53,7 @@ pub fn cel_to_log_expr_with_udfs(source: &str, external_udf_names: &[&str]) -> R
     let ast = cel_parser::parse(source).map_err(CelConvertError::Parse)?;
     let has_udf = Cell::new(false);
     let external_names: HashSet<&str> = external_udf_names.iter().copied().collect();
-    let expr = convert_with_udfs(&ast, &has_udf, &external_names)?;
+    let expr = crate::bindings::canonicalize_bindings(&convert_with_udfs(&ast, &has_udf, &external_names)?);
     let is_root_udf = matches!(&expr, LogExpr::CelFallback { .. });
     let status = if !has_udf.get() {
         TranslationStatus::FullyRaised

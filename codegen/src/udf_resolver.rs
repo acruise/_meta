@@ -84,6 +84,7 @@ fn resolve_inner(expr: &LogExpr, ctx: &Ctx<'_>) -> Result<LogExpr, ResolveError>
         LogExpr::Literal(_)
         | LogExpr::GetFieldByName { .. }
         | LogExpr::GetFieldByIndex { .. }
+        | LogExpr::GetBinding { .. }
         | LogExpr::CurrentTimestamp => Ok(expr.clone()),
 
         LogExpr::LogicalOr { lhs, rhs } => Ok(LogExpr::LogicalOr { lhs: r(lhs, ctx)?, rhs: r(rhs, ctx)? }),

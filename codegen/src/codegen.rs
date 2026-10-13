@@ -460,6 +460,7 @@ fn emit_intrinsic_coeffects(
     writeln!(out, "        match self {{").unwrap();
 
     writeln!(out, "            Self::GetFieldByName {{ .. }} | Self::GetFieldByIndex {{ .. }} => CoeffectSet::event_data(),").unwrap();
+    writeln!(out, "            Self::GetBinding {{ binding_name }} => CoeffectSet::reads_binding(binding_name.clone()),").unwrap();
     writeln!(out, "            Self::CelFallback {{ .. }} => CoeffectSet::unknown(),").unwrap();
     writeln!(out, "            Self::UnresolvedCall {{ .. }} | Self::ExternalCall {{ .. }} => {{").unwrap();
     writeln!(out, "                CoeffectSet::external_udf(crate::coeffects::UdfLanguage::Opaque)").unwrap();
@@ -510,7 +511,7 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "    match expr {{").unwrap();
     // Recursively union children. We enumerate the structural shapes.
     writeln!(out, "        LogExpr::Literal(_) => {{}},").unwrap();
-    writeln!(out, "        LogExpr::GetFieldByName {{ .. }} | LogExpr::GetFieldByIndex {{ .. }} | LogExpr::CurrentTimestamp => {{}},").unwrap();
+    writeln!(out, "        LogExpr::GetFieldByName {{ .. }} | LogExpr::GetFieldByIndex {{ .. }} | LogExpr::GetBinding {{ .. }} | LogExpr::CurrentTimestamp => {{}},").unwrap();
 
     // Unary: one child named `operand`
     writeln!(out, "        LogExpr::LogicalNot {{ operand }} | LogExpr::Negate {{ operand }}").unwrap();
@@ -594,12 +595,14 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "        }},").unwrap();
 
     // HOFs: collection + body
-    writeln!(out, "        LogExpr::All {{ collection, body, .. }} | LogExpr::Exists {{ collection, body, .. }}").unwrap();
-    writeln!(out, "        | LogExpr::ExistsOne {{ collection, body, .. }} | LogExpr::Filter {{ collection, body, .. }}").unwrap();
-    writeln!(out, "        | LogExpr::MapTransform {{ collection, body, .. }}").unwrap();
+    // The HOF binds its variable for the body, so the body's read of it is
+    // discharged here: the HOF as a whole is not an open term on its account.
+    writeln!(out, "        LogExpr::All {{ collection, binding, body }} | LogExpr::Exists {{ collection, binding, body }}").unwrap();
+    writeln!(out, "        | LogExpr::ExistsOne {{ collection, binding, body }} | LogExpr::Filter {{ collection, binding, body }}").unwrap();
+    writeln!(out, "        | LogExpr::MapTransform {{ collection, binding, body }}").unwrap();
     writeln!(out, "        => {{").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(collection));").unwrap();
-    writeln!(out, "            result = result.union(transitive_coeffects(body));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(body).without_binding(binding));").unwrap();
     writeln!(out, "        }},").unwrap();
 
     // CelFallback / UnresolvedCall / ExternalCall: args
