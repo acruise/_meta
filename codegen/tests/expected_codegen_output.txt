@@ -122,6 +122,24 @@ pub enum LogExpr {
     /// also works as map(K, V)[K] → V; overloaded
     Index { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
     In { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// The list with one element added at the end. A CEL list literal whose items are not all constants lowers to a chain of these starting from the empty list, so `[a, b]` is list_append(list_append([], a), b).
+    ListAppend { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// Elements of the first list followed by elements of the second. CEL spells this `_+_` on lists, an overload of the arithmetic operator that is not yet distinguished from it.
+    ListConcat { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// Concatenation of the inner lists, in order. One level only. An inner element that is not a list contributes nothing. flat_map is flatten(map(xs, x, f(x))).
+    Flatten { operand: Box<LogExpr> },
+    /// The elements of a list, in order. Any other value (including null and maps) yields the empty list. Identity on lists; exists so a selection over a value of unknown shape can be written without a type test.
+    ListElements { operand: Box<LogExpr> },
+    /// The member values of a map, in key order. Any other value (including null and lists) yields the empty list.
+    MapValues { operand: Box<LogExpr> },
+    /// The value itself followed by every value nested inside it, depth-first in document order (list elements in order, map member values in key order). Always non-empty: a scalar yields a one-element list of itself.
+    Descendants { operand: Box<LogExpr> },
+    /// Optional list element: a one-element list holding the element at the given index, counting from the end when negative, or the empty list if the index is out of range or the first argument is not a list. The list counterpart of get_child_by_index; maps use get_member_by_key.
+    GetElementByIndex { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// Optional map member: a one-element list holding the value of the member whose key equals the second argument, or the empty list if there is no such member or the first argument is not a map. Distinguishes an absent member (empty list) from a member whose value is null (a list holding null), which plain indexing cannot. The map counterpart of get_child_by_name; lists use get_element_by_index.
+    GetMemberByKey { lhs: Box<LogExpr>, rhs: Box<LogExpr> },
+    /// Elements from start (inclusive) to end (exclusive) taking every step-th. Negative start and end count from the end of the list. A null step means 1; a null start or end means the beginning or end of the list in the direction of travel. A negative step walks backwards; a zero step yields the empty list. Out-of-range bounds are clamped, never an error. The semantics are those of RFC 9535 array slices. A non-list first argument yields the empty list.
+    ListSlice { collection: Box<LogExpr>, start: Box<LogExpr>, end: Box<LogExpr>, step: Box<LogExpr> },
     Ln { operand: Box<LogExpr> },
     Log10 { operand: Box<LogExpr> },
     Ceil { operand: Box<LogExpr> },
@@ -146,6 +164,7 @@ pub enum LogExpr {
     /// render integer as dotted-quad (v4) or colon-hex (v6)
     IntToIp { operand: Box<LogExpr> },
 
+    JsonParseAs { target_type: meta_types::type_syntax::TypeLiteral, operand: Box<LogExpr> },
     GetFieldByName { field_name: String },
     GetFieldByIndex { field_index: u32 },
     GetChildByName { child_name: String, operand: Box<LogExpr> },
@@ -225,6 +244,7 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
         | LogExpr::JsonParse { operand } | LogExpr::JsonParseStruct { operand } | LogExpr::JsonStringify { operand }
         | LogExpr::IpToInt { operand } | LogExpr::IntToIp { operand }
         | LogExpr::Has { operand }
+        | LogExpr::Flatten { operand } | LogExpr::ListElements { operand } | LogExpr::MapValues { operand } | LogExpr::Descendants { operand }
         | LogExpr::RaiseError { operand }
         => { result = result.union(transitive_coeffects(operand)); },
         LogExpr::LogicalOr { lhs, rhs } | LogExpr::LogicalAnd { lhs, rhs }
@@ -241,6 +261,7 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
         | LogExpr::JsonExtract { lhs, rhs } | LogExpr::JsonExtractString { lhs, rhs }
         | LogExpr::CidrContains { lhs, rhs } | LogExpr::CidrMatch { lhs, rhs }
         | LogExpr::RegexExtract { lhs, rhs }
+        | LogExpr::ListAppend { lhs, rhs } | LogExpr::ListConcat { lhs, rhs } | LogExpr::GetElementByIndex { lhs, rhs } | LogExpr::GetMemberByKey { lhs, rhs }
         => {
             result = result.union(transitive_coeffects(lhs));
             result = result.union(transitive_coeffects(rhs));
@@ -258,6 +279,13 @@ pub fn transitive_coeffects(expr: &LogExpr) -> crate::coeffects::CoeffectSet {
             result = result.union(transitive_coeffects(arg0));
             result = result.union(transitive_coeffects(arg1));
             result = result.union(transitive_coeffects(arg2));
+        },
+        LogExpr::JsonParseAs { operand, .. } => { result = result.union(transitive_coeffects(operand)); },
+        LogExpr::ListSlice { collection, start, end, step } => {
+            result = result.union(transitive_coeffects(collection));
+            result = result.union(transitive_coeffects(start));
+            result = result.union(transitive_coeffects(end));
+            result = result.union(transitive_coeffects(step));
         },
         LogExpr::Conditional { condition, then_expr, else_expr } => {
             result = result.union(transitive_coeffects(condition));
@@ -305,3 +333,133 @@ impl LogExpr {
     }
 }
 
+/// Generated — do not modify. See top of file.
+impl LogExpr {
+    /// Mutable references to this node's direct children, in field order.
+    pub fn children_mut(&mut self) -> Vec<&mut LogExpr> {
+        match self {
+            Self::Literal(_) => vec![],
+            Self::LogicalOr { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::LogicalAnd { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::LogicalNot { operand, .. } => vec![operand.as_mut()],
+            Self::Equal { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::NotEqual { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::LessThan { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::LessOrEqual { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::GreaterThan { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::GreaterOrEqual { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Between { arg0, arg1, arg2, .. } => vec![arg0.as_mut(), arg1.as_mut(), arg2.as_mut()],
+            Self::NullSafeEqual { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::NullSafeNotEqual { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::IsNull { operand, .. } => vec![operand.as_mut()],
+            Self::IsNotNull { operand, .. } => vec![operand.as_mut()],
+            Self::IsNan { operand, .. } => vec![operand.as_mut()],
+            Self::IsFinite { operand, .. } => vec![operand.as_mut()],
+            Self::IsInfinite { operand, .. } => vec![operand.as_mut()],
+            Self::Coalesce { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::TryOrElse { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::RaiseError { operand, .. } => vec![operand.as_mut()],
+            Self::Least { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Greatest { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Add { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Subtract { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Multiply { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Divide { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Negate { operand, .. } => vec![operand.as_mut()],
+            Self::Modulus { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Abs { operand, .. } => vec![operand.as_mut()],
+            Self::Power { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Sqrt { operand, .. } => vec![operand.as_mut()],
+            Self::Exp { operand, .. } => vec![operand.as_mut()],
+            Self::Sign { operand, .. } => vec![operand.as_mut()],
+            Self::Contains { receiver, arg, .. } => vec![receiver.as_mut(), arg.as_mut()],
+            Self::StartsWith { receiver, arg, .. } => vec![receiver.as_mut(), arg.as_mut()],
+            Self::EndsWith { receiver, arg, .. } => vec![receiver.as_mut(), arg.as_mut()],
+            Self::RegexMatch { receiver, arg, .. } => vec![receiver.as_mut(), arg.as_mut()],
+            Self::RegexExtract { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::RegexReplace { arg0, arg1, arg2, .. } => vec![arg0.as_mut(), arg1.as_mut(), arg2.as_mut()],
+            Self::UrlPathSegment { arg0, arg1, arg2, .. } => vec![arg0.as_mut(), arg1.as_mut(), arg2.as_mut()],
+            Self::UrlQueryParam { arg0, arg1, arg2, .. } => vec![arg0.as_mut(), arg1.as_mut(), arg2.as_mut()],
+            Self::Size { operand, .. } => vec![operand.as_mut()],
+            Self::Lower { operand, .. } => vec![operand.as_mut()],
+            Self::Upper { operand, .. } => vec![operand.as_mut()],
+            Self::Substring { arg0, arg1, arg2, .. } => vec![arg0.as_mut(), arg1.as_mut(), arg2.as_mut()],
+            Self::Replace { arg0, arg1, arg2, .. } => vec![arg0.as_mut(), arg1.as_mut(), arg2.as_mut()],
+            Self::Trim { operand, .. } => vec![operand.as_mut()],
+            Self::StringSplit { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::StringPosition { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Concat { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::TimestampExtract { operand, .. } => vec![operand.as_mut()],
+            Self::RoundTemporal { operand, .. } => vec![operand.as_mut()],
+            Self::RoundCalendar { operand, .. } => vec![operand.as_mut()],
+            Self::CurrentTimestamp { .. } => vec![],
+            Self::CastBool { operand, .. } => vec![operand.as_mut()],
+            Self::CastInt { operand, .. } => vec![operand.as_mut()],
+            Self::CastUint { operand, .. } => vec![operand.as_mut()],
+            Self::CastDouble { operand, .. } => vec![operand.as_mut()],
+            Self::CastString { operand, .. } => vec![operand.as_mut()],
+            Self::CastBytes { operand, .. } => vec![operand.as_mut()],
+            Self::CastDuration { operand, .. } => vec![operand.as_mut()],
+            Self::CastTimestamp { operand, .. } => vec![operand.as_mut()],
+            Self::TypeOf { operand, .. } => vec![operand.as_mut()],
+            Self::Dyn { operand, .. } => vec![operand.as_mut()],
+            Self::Conditional { condition, then_expr, else_expr, .. } => vec![condition.as_mut(), then_expr.as_mut(), else_expr.as_mut()],
+            Self::Index { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::In { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::ListAppend { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::ListConcat { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Flatten { operand, .. } => vec![operand.as_mut()],
+            Self::ListElements { operand, .. } => vec![operand.as_mut()],
+            Self::MapValues { operand, .. } => vec![operand.as_mut()],
+            Self::Descendants { operand, .. } => vec![operand.as_mut()],
+            Self::GetElementByIndex { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::GetMemberByKey { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::ListSlice { collection, start, end, step, .. } => vec![collection.as_mut(), start.as_mut(), end.as_mut(), step.as_mut()],
+            Self::Ln { operand, .. } => vec![operand.as_mut()],
+            Self::Log10 { operand, .. } => vec![operand.as_mut()],
+            Self::Ceil { operand, .. } => vec![operand.as_mut()],
+            Self::Floor { operand, .. } => vec![operand.as_mut()],
+            Self::Round { operand, .. } => vec![operand.as_mut()],
+            Self::JsonParse { operand, .. } => vec![operand.as_mut()],
+            Self::JsonParseStruct { operand, .. } => vec![operand.as_mut()],
+            Self::JsonStringify { operand, .. } => vec![operand.as_mut()],
+            Self::JsonExtract { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::JsonExtractString { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::CidrContains { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::CidrMatch { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::IpToInt { operand, .. } => vec![operand.as_mut()],
+            Self::IntToIp { operand, .. } => vec![operand.as_mut()],
+            Self::JsonParseAs { operand, .. } => vec![operand.as_mut()],
+            Self::GetFieldByName { .. } => vec![],
+            Self::GetFieldByIndex { .. } => vec![],
+            Self::GetChildByName { operand, .. } => vec![operand.as_mut()],
+            Self::GetChildByIndex { lhs, rhs, .. } => vec![lhs.as_mut(), rhs.as_mut()],
+            Self::Has { operand, .. } => vec![operand.as_mut()],
+            Self::All { collection, body, .. } => vec![collection.as_mut(), body.as_mut()],
+            Self::Exists { collection, body, .. } => vec![collection.as_mut(), body.as_mut()],
+            Self::ExistsOne { collection, body, .. } => vec![collection.as_mut(), body.as_mut()],
+            Self::Filter { collection, body, .. } => vec![collection.as_mut(), body.as_mut()],
+            Self::MapTransform { collection, body, .. } => vec![collection.as_mut(), body.as_mut()],
+            Self::CelFallback { args, .. } | Self::UnresolvedCall { args, .. } | Self::ExternalCall { args, .. } => {
+                args.iter_mut().map(|a| a.as_mut()).collect()
+            }
+            Self::Case { arms, default } => {
+                let mut v = Vec::with_capacity(arms.len() * 2 + 1);
+                for (c, r) in arms.iter_mut() {
+                    v.push(c.as_mut());
+                    v.push(r.as_mut());
+                }
+                v.push(default.as_mut());
+                v
+            }
+        }
+    }
+
+    /// This node's own type-literal properties (not its children's).
+    pub fn type_literals_mut(&mut self) -> Vec<&mut meta_types::type_syntax::TypeLiteral> {
+        match self {
+            Self::JsonParseAs { target_type, .. } => vec![target_type],
+            _ => vec![],
+        }
+    }
+}

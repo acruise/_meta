@@ -381,7 +381,8 @@ fn check_conformance(
     out: &mut Vec<Violation>,
 ) {
     if value.is_null() {
-        if !nullable {
+        // Null is itself a Json value, so a Json-typed slot always admits it.
+        if !nullable && !matches!(vt, ValueType::Json) {
             out.push(Violation::not_conform(path.clone(), "null in a non-nullable position"));
         }
         return;
@@ -435,6 +436,7 @@ fn check_conformance(
             }
             _ => out.push(Violation::not_conform(path.clone(), format!("expected enum, found {}", kind(value)))),
         },
+        ValueType::Json => check_json(value, path, out),
         // Scalar leaves: the variant must line up.
         _ => {
             if !scalar_conforms(value, vt) {
@@ -446,6 +448,37 @@ fn check_conformance(
 
 /// Whether a non-null scalar value matches a scalar `ValueType`. Compound and
 /// enum types are handled by the caller.
+/// The JSON-native subset: null, bool, i64, finite f64, string, arrays of
+/// these, and string-keyed maps of these.
+fn check_json(value: &Value, path: &mut Path, out: &mut Vec<Violation>) {
+    match value {
+        Value::Null | Value::Bool(_) | Value::I64(_) | Value::String(_) => {}
+        Value::F64(x) if x.is_finite() => {}
+        Value::Array(elems) => {
+            for (i, e) in elems.iter().enumerate() {
+                path.push_index(i);
+                check_json(e, path, out);
+                path.pop();
+            }
+        }
+        Value::Map(entries) => {
+            for (k, v) in entries {
+                let crate::value::MapKey::String(k) = k else {
+                    out.push(Violation::not_conform(path.clone(), "json object keys must be strings"));
+                    continue;
+                };
+                path.push_field(k.clone());
+                check_json(v, path, out);
+                path.pop();
+            }
+        }
+        other => out.push(Violation::not_conform(
+            path.clone(),
+            format!("{} is not a json value", kind(other)),
+        )),
+    }
+}
+
 fn scalar_conforms(value: &Value, vt: &ValueType) -> bool {
     matches!(
         (value, vt),

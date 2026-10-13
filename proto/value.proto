@@ -83,6 +83,9 @@ message ValueType {
 
     // --- Reference to a user-defined Value Type Declaration ---
     ValueTypeRef type_ref = 90;
+
+    // --- Schemaless ---
+    JsonType json = 19;
   }
 }
 
@@ -113,6 +116,12 @@ message BlobType {}
 message ClobType {
   string encoding = 1;  // e.g. "utf-8", "utf-16", "shift-jis"
 }
+
+// A value whose JSON form alone determines it: null, bool, 64-bit integer,
+// double, string, an array of these, or a string-keyed map of these. Values
+// are carried in EncodedValue unchanged; the oneof case identifies the kind
+// (unset is null). The analogue of google.protobuf.Value.
+message JsonType {}
 
 // String type. Currently unparameterized, but the metamodel leaves room
 // for a max_length parameter (fixed vs variable). Deployments that need

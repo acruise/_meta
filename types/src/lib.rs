@@ -3,6 +3,7 @@ pub mod coeffects;
 pub mod effects;
 pub mod external_fn;
 pub mod validation;
+pub mod type_syntax;
 
 #[cfg(feature = "yaml-catalog")]
 pub mod udf_catalog;

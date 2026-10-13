@@ -168,6 +168,11 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
         LogExpr::IpToInt { operand } => LogExpr::IpToInt { operand: n(operand) },
         LogExpr::IntToIp { operand } => LogExpr::IntToIp { operand: n(operand) },
         LogExpr::Has { operand } => LogExpr::Has { operand: n(operand) },
+        LogExpr::Flatten { operand } => LogExpr::Flatten { operand: n(operand) },
+        LogExpr::JsonParseAs { target_type, operand } => LogExpr::JsonParseAs { target_type: target_type.clone(), operand: n(operand) },
+        LogExpr::ListElements { operand } => LogExpr::ListElements { operand: n(operand) },
+        LogExpr::MapValues { operand } => LogExpr::MapValues { operand: n(operand) },
+        LogExpr::Descendants { operand } => LogExpr::Descendants { operand: n(operand) },
         LogExpr::RaiseError { operand } => LogExpr::RaiseError { operand: n(operand) },
 
         // Binary (non-commutative handled here; commutative handled in normalize_commutative)
@@ -209,6 +214,13 @@ fn normalize_children(expr: &LogExpr) -> LogExpr {
         LogExpr::EndsWith { receiver, arg } => LogExpr::EndsWith { receiver: n(receiver), arg: n(arg) },
         LogExpr::RegexMatch { receiver, arg } => LogExpr::RegexMatch { receiver: n(receiver), arg: n(arg) },
         LogExpr::RegexExtract { lhs, rhs } => LogExpr::RegexExtract { lhs: n(lhs), rhs: n(rhs) },
+        LogExpr::ListAppend { lhs, rhs } => LogExpr::ListAppend { lhs: n(lhs), rhs: n(rhs) },
+        LogExpr::ListConcat { lhs, rhs } => LogExpr::ListConcat { lhs: n(lhs), rhs: n(rhs) },
+        LogExpr::GetElementByIndex { lhs, rhs } => LogExpr::GetElementByIndex { lhs: n(lhs), rhs: n(rhs) },
+        LogExpr::GetMemberByKey { lhs, rhs } => LogExpr::GetMemberByKey { lhs: n(lhs), rhs: n(rhs) },
+        LogExpr::ListSlice { collection, start, end, step } => LogExpr::ListSlice {
+            collection: n(collection), start: n(start), end: n(end), step: n(step),
+        },
         LogExpr::RegexReplace { arg0, arg1, arg2 } => LogExpr::RegexReplace { arg0: n(arg0), arg1: n(arg1), arg2: n(arg2) },
         LogExpr::UrlPathSegment { arg0, arg1, arg2 } => LogExpr::UrlPathSegment { arg0: n(arg0), arg1: n(arg1), arg2: n(arg2) },
         LogExpr::UrlQueryParam { arg0, arg1, arg2 } => LogExpr::UrlQueryParam { arg0: n(arg0), arg1: n(arg1), arg2: n(arg2) },

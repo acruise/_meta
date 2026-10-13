@@ -145,6 +145,15 @@ pub enum ValueType {
         key_type: Box<ValueType>,
         revision_pinnable: bool,
     },
+
+    // --- Schemaless ---
+    /// A value whose JSON form alone determines it: `Null`, `Bool`, `I64`,
+    /// `F64`, `String`, an `Array` of Json, or a `Map` with string keys and
+    /// Json values. Every value round-trips through JSON given its type;
+    /// a Json value round-trips without one. The analogue of protobuf's
+    /// `google.protobuf.Value`. No runtime representation of its own: it
+    /// constrains which existing `Value`s are allowed.
+    Json,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -453,6 +462,7 @@ mod proto_conv {
                 ValueType::Ipv6 => Kind::Ipv6(pb::Ipv6Type {}),
                 ValueType::Blob => Kind::Blob(pb::BlobType {}),
                 ValueType::Clob => Kind::Clob(pb::ClobType { encoding: String::new() }),
+                ValueType::Json => Kind::Json(pb::JsonType {}),
                 ValueType::String => Kind::String(pb::StringType { max_length: 0 }),
                 ValueType::Decimal { precision, scale } => Kind::Decimal(pb::DecimalType {
                     precision: *precision,
@@ -518,6 +528,7 @@ mod proto_conv {
                     Kind::Ipv6(_) => ValueType::Ipv6,
                     Kind::Blob(_) => ValueType::Blob,
                     Kind::Clob(_) => ValueType::Clob,
+                    Kind::Json(_) => ValueType::Json,
                     Kind::Decimal(d) => ValueType::Decimal {
                         precision: d.precision,
                         scale: d.scale,
@@ -827,6 +838,15 @@ pub use value_serde::{encode_value, decode_value};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_type_proto_round_trip() {
+        use crate::cluonflux::meta as pb;
+        let arr = ValueType::Array { element_type: Box::new(ValueType::Json), elements_nullable: true };
+        for vt in [ValueType::Json, arr] {
+            assert_eq!(ValueType::from(&pb::ValueType::from(&vt)), vt);
+        }
+    }
 
     #[test]
     fn parse_ipv4_basic() {

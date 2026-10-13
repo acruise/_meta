@@ -23,7 +23,7 @@ impl From<&meta_types::external_fn::UdfCatalogEntry> for ExternalUdfMeta {
 }
 
 const _: () = assert!(
-    crate::expr_gen::EXPR_GEN_HASH == 0xc434780decfca982,
+    crate::expr_gen::EXPR_GEN_HASH == 0x51b17a790c5c2a8e,
     "type_check.rs needs review — EXPR_GEN_HASH changed"
 );
 
@@ -225,6 +225,17 @@ impl TypeChecker {
             LogExpr::Lower { operand } => self.check_string_unary(operand, |o| LogExpr::Lower { operand: o }),
             LogExpr::Trim { operand } => self.check_string_unary(operand, |o| LogExpr::Trim { operand: o }),
 
+            // The result type is the literal's: known statically, which is
+            // the point of a type literal. Names must be resolved first.
+            LogExpr::JsonParseAs { target_type, operand } => {
+                let (operand, _) = self.expect_type(operand, &ValueType::String, "json_parse_as")?;
+                let Some(ty) = target_type.resolved() else {
+                    return Err(TypeError {
+                        message: format!("unresolved type `{target_type}` in json_parse_as; resolve type literals before type checking"),
+                    });
+                };
+                Ok((LogExpr::JsonParseAs { target_type: target_type.clone(), operand: Box::new(operand) }, ty.clone()))
+            }
             LogExpr::Size { operand } => {
                 let (operand, vt) = self.check(operand)?;
                 if !is_sizable(&vt) {
@@ -801,6 +812,20 @@ mod tests {
             rhs: Box::new(LogExpr::Literal(Value::Bool(true))),
         };
         assert!(tc.check(&expr).is_err());
+    }
+
+    #[test]
+    fn json_parse_as_has_the_literal_type() {
+        use meta_types::type_syntax::{parse_type_literal, TypeLiteral};
+        let tc = checker(AutoCastMode::Off, vec![("s", ValueType::String), ("n", ValueType::I64)]);
+        let parse_as = |field: &str, ty: &str| LogExpr::JsonParseAs {
+            target_type: TypeLiteral::parse(ty).unwrap(),
+            operand: Box::new(LogExpr::GetFieldByName { field_name: field.into() }),
+        };
+        let (_, ty) = tc.check(&parse_as("s", "map<string, array<i64?>>")).unwrap();
+        assert_eq!(ty, parse_type_literal("map<string, array<i64?>>").unwrap());
+        assert!(tc.check(&parse_as("s", "array<Order>")).unwrap_err().message.contains("unresolved"));
+        assert!(tc.check(&parse_as("n", "i64")).is_err());
     }
 
     #[test]

@@ -24,6 +24,10 @@
 //!   never reach this module: serde_yaml resolves them during parsing, so
 //!   `!!binary aGVsbG8=` arrives as the plain string a `Blob` expects.)
 //!
+//! - **`Json`** reads a YAML node as the JSON it denotes: mapping keys must
+//!   be strings and floats finite, since a Json value round-trips without a
+//!   type only if it stays inside the JSON data model.
+//!
 //! [`value_to_yaml`] emits the canonical form: the `json` module's scalar
 //! spellings, mappings with natively-typed keys (integers and bools
 //! unquoted), and null struct slots omitted — such that
@@ -69,7 +73,7 @@ fn parse(yaml: &Yaml, ty: &ValueType, nullable: bool, path: &str) -> Result<Valu
         return Err(err(path, "YAML tags are not supported"));
     }
     if yaml.is_null() {
-        if matches!(ty, T::Null) || nullable {
+        if matches!(ty, T::Null | T::Json) || nullable {
             return Ok(Value::Null);
         }
         return Err(err(path, "null where the type does not permit it"));
@@ -126,6 +130,7 @@ fn parse(yaml: &Yaml, ty: &ValueType, nullable: bool, path: &str) -> Result<Valu
         T::F64 => yaml.as_f64().map(Value::F64).ok_or_else(|| expected("number")),
         // Every other scalar leaf: the YAML scalar embeds losslessly in the
         // JSON data model, and the canonicalization rules are `json`'s.
+        T::Json => yaml_to_untyped(yaml, path),
         _ => parse_json(&scalar_to_json(yaml, path)?, ty, nullable, path),
     }
 }
@@ -146,6 +151,42 @@ fn map_key_text(key: &Yaml, key_type: &ValueType, path: &str) -> Result<String, 
             ));
         }
     })
+}
+
+/// A YAML node read as a `ValueType::Json` value.
+fn yaml_to_untyped(yaml: &Yaml, path: &str) -> Result<Value, Mismatch> {
+    match yaml {
+        Yaml::Tagged(_) => Err(err(path, "YAML tags are not supported")),
+        Yaml::Sequence(items) => Ok(Value::Array(
+            items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| yaml_to_untyped(item, &index_path(path, i)))
+                .collect::<Result<_, _>>()?,
+        )),
+        Yaml::Mapping(m) => {
+            let mut out = std::collections::BTreeMap::new();
+            for (k, v) in m {
+                let Yaml::String(k) = k else {
+                    return Err(err(path, format!("json object keys must be strings, found {}", yaml_kind(k))));
+                };
+                out.insert(MapKey::String(k.clone()), yaml_to_untyped(v, &key_path(path, k))?);
+            }
+            Ok(Value::Map(out))
+        }
+        scalar => Ok(crate::json::untyped(&scalar_to_json(scalar, path)?)),
+    }
+}
+
+/// Any JSON document into the identical YAML node.
+fn json_to_yaml(json: Json) -> Yaml {
+    match json {
+        Json::Array(items) => Yaml::Sequence(items.into_iter().map(json_to_yaml).collect()),
+        Json::Object(o) => Yaml::Mapping(
+            o.into_iter().map(|(k, v)| (Yaml::String(k), json_to_yaml(v))).collect(),
+        ),
+        scalar => json_scalar_to_yaml(scalar),
+    }
 }
 
 /// A YAML scalar into the identical JSON scalar. Containers and tags don't
@@ -249,6 +290,7 @@ fn emit(value: &Value, ty: &ValueType, path: &str) -> Result<Yaml, Mismatch> {
         (T::F64, V::F64(v)) => Yaml::Number((*v).into()),
         (T::F32, _) | (T::F64, _) => return Err(mismatch("float")),
         // Every other scalar leaf: `json`'s canonical spelling, verbatim.
+        (T::Json, v) => json_to_yaml(emit_json(v, ty, path)?),
         _ => json_scalar_to_yaml(emit_json(value, ty, path)?),
     })
 }
@@ -302,6 +344,23 @@ mod tests {
     use crate::conformance::conforms;
     use crate::json::json_to_value;
     use meta_types::value::{StructField, TimestampPrecision, TimestampTimezone};
+
+    #[test]
+    fn json_type_reads_yaml_as_the_json_it_denotes() {
+        let y: Yaml = serde_yaml::from_str("a: [1, 2.5, x, ~]\nb: {c: true}").unwrap();
+        let v = yaml_to_value(&y, &ValueType::Json).unwrap();
+        assert!(conforms(&v, &ValueType::Json).is_ok());
+        let back = value_to_yaml(&v, &ValueType::Json).unwrap();
+        assert_eq!(yaml_to_value(&back, &ValueType::Json).unwrap(), v);
+    }
+
+    #[test]
+    fn json_type_rejects_non_string_keys_and_non_finite_floats() {
+        let int_key: Yaml = serde_yaml::from_str("1: x").unwrap();
+        assert!(yaml_to_value(&int_key, &ValueType::Json).is_err());
+        let inf: Yaml = serde_yaml::from_str(".inf").unwrap();
+        assert!(yaml_to_value(&inf, &ValueType::Json).is_err());
+    }
 
     fn field(name: &str, value_type: ValueType, nullable: bool) -> StructField {
         StructField {

@@ -187,6 +187,9 @@ pub fn yaml_type_to_rust(t: &str) -> &str {
         "int" => "i64",
         "u32" => "u32",
         "bool" => "bool",
+        // A type written in the expression (`type_syntax`), resolved at plan
+        // time; see `LogExpr::type_literals_mut`.
+        "type" => "meta_types::type_syntax::TypeLiteral",
         _ => "String",
     }
 }
@@ -367,6 +370,81 @@ fn emit_logical_ir(
 
     emit_intrinsic_coeffects(out, scalars, property_ops, hofs);
     emit_transitive_coeffects(out);
+    emit_child_access(out, scalars, property_ops, hofs);
+}
+
+/// `children_mut` (generic traversal for rewriting passes, so a pass need not
+/// enumerate every variant) and `type_literals_mut` (a node's own
+/// type-valued properties), both derived from the catalog.
+fn emit_child_access(
+    out: &mut String,
+    scalars: &[&CatalogEntry],
+    property_ops: &[&CatalogEntry],
+    hofs: &[&CatalogEntry],
+) {
+    let arm = |out: &mut String, name: &str, fields: &[String]| {
+        if fields.is_empty() {
+            writeln!(out, "            Self::{name} {{ .. }} => vec![],").unwrap();
+        } else {
+            let refs: Vec<String> = fields.iter().map(|f| format!("{f}.as_mut()")).collect();
+            writeln!(out, "            Self::{name} {{ {}, .. }} => vec![{}],", fields.join(", "), refs.join(", ")).unwrap();
+        }
+    };
+    let child_names = |e: &CatalogEntry| -> Vec<String> {
+        deduplicate_fields(&e.child_fields()).into_iter().map(|(k, _)| k).collect()
+    };
+
+    gen_warning(out);
+    writeln!(out, "impl LogExpr {{").unwrap();
+    writeln!(out, "    /// Mutable references to this node's direct children, in field order.").unwrap();
+    writeln!(out, "    pub fn children_mut(&mut self) -> Vec<&mut LogExpr> {{").unwrap();
+    writeln!(out, "        match self {{").unwrap();
+    writeln!(out, "            Self::Literal(_) => vec![],").unwrap();
+    for e in scalars.iter().chain(property_ops) {
+        arm(out, e.internal.as_ref().unwrap(), &child_names(e));
+    }
+    for e in hofs {
+        let fields = if e.lambda.is_some() {
+            vec!["collection".to_string(), "body".to_string()]
+        } else {
+            child_names(e)
+        };
+        arm(out, e.internal.as_ref().unwrap(), &fields);
+    }
+    writeln!(out, "            Self::CelFallback {{ args, .. }} | Self::UnresolvedCall {{ args, .. }} | Self::ExternalCall {{ args, .. }} => {{").unwrap();
+    writeln!(out, "                args.iter_mut().map(|a| a.as_mut()).collect()").unwrap();
+    writeln!(out, "            }}").unwrap();
+    writeln!(out, "            Self::Case {{ arms, default }} => {{").unwrap();
+    writeln!(out, "                let mut v = Vec::with_capacity(arms.len() * 2 + 1);").unwrap();
+    writeln!(out, "                for (c, r) in arms.iter_mut() {{").unwrap();
+    writeln!(out, "                    v.push(c.as_mut());").unwrap();
+    writeln!(out, "                    v.push(r.as_mut());").unwrap();
+    writeln!(out, "                }}").unwrap();
+    writeln!(out, "                v.push(default.as_mut());").unwrap();
+    writeln!(out, "                v").unwrap();
+    writeln!(out, "            }}").unwrap();
+    writeln!(out, "        }}").unwrap();
+    writeln!(out, "    }}").unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "    /// This node's own type-literal properties (not its children's).").unwrap();
+    writeln!(out, "    pub fn type_literals_mut(&mut self) -> Vec<&mut meta_types::type_syntax::TypeLiteral> {{").unwrap();
+    writeln!(out, "        match self {{").unwrap();
+    for e in property_ops {
+        let typed: Vec<&String> = e.properties.as_ref().unwrap().iter()
+            .filter(|(_, v)| v.as_str() == "type")
+            .map(|(k, _)| k)
+            .collect();
+        if typed.is_empty() {
+            continue;
+        }
+        let names: Vec<&str> = typed.iter().map(|k| k.as_str()).collect();
+        writeln!(out, "            Self::{} {{ {}, .. }} => vec![{}],", e.internal.as_ref().unwrap(), names.join(", "), names.join(", ")).unwrap();
+    }
+    writeln!(out, "            _ => vec![],").unwrap();
+    writeln!(out, "        }}").unwrap();
+    writeln!(out, "    }}").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
 }
 
 fn emit_intrinsic_coeffects(
@@ -450,6 +528,7 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "        | LogExpr::JsonParse {{ operand }} | LogExpr::JsonParseStruct {{ operand }} | LogExpr::JsonStringify {{ operand }}").unwrap();
     writeln!(out, "        | LogExpr::IpToInt {{ operand }} | LogExpr::IntToIp {{ operand }}").unwrap();
     writeln!(out, "        | LogExpr::Has {{ operand }}").unwrap();
+    writeln!(out, "        | LogExpr::Flatten {{ operand }} | LogExpr::ListElements {{ operand }} | LogExpr::MapValues {{ operand }} | LogExpr::Descendants {{ operand }}").unwrap();
     writeln!(out, "        | LogExpr::RaiseError {{ operand }}").unwrap();
     writeln!(out, "        => {{ result = result.union(transitive_coeffects(operand)); }},").unwrap();
 
@@ -468,6 +547,7 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "        | LogExpr::JsonExtract {{ lhs, rhs }} | LogExpr::JsonExtractString {{ lhs, rhs }}").unwrap();
     writeln!(out, "        | LogExpr::CidrContains {{ lhs, rhs }} | LogExpr::CidrMatch {{ lhs, rhs }}").unwrap();
     writeln!(out, "        | LogExpr::RegexExtract {{ lhs, rhs }}").unwrap();
+    writeln!(out, "        | LogExpr::ListAppend {{ lhs, rhs }} | LogExpr::ListConcat {{ lhs, rhs }} | LogExpr::GetElementByIndex {{ lhs, rhs }} | LogExpr::GetMemberByKey {{ lhs, rhs }}").unwrap();
     writeln!(out, "        => {{").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(lhs));").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(rhs));").unwrap();
@@ -491,6 +571,13 @@ fn emit_transitive_coeffects(out: &mut String) {
     writeln!(out, "            result = result.union(transitive_coeffects(arg2));").unwrap();
     writeln!(out, "        }},").unwrap();
 
+    writeln!(out, "        LogExpr::JsonParseAs {{ operand, .. }} => {{ result = result.union(transitive_coeffects(operand)); }},").unwrap();
+    writeln!(out, "        LogExpr::ListSlice {{ collection, start, end, step }} => {{").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(collection));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(start));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(end));").unwrap();
+    writeln!(out, "            result = result.union(transitive_coeffects(step));").unwrap();
+    writeln!(out, "        }},").unwrap();
     writeln!(out, "        LogExpr::Conditional {{ condition, then_expr, else_expr }} => {{").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(condition));").unwrap();
     writeln!(out, "            result = result.union(transitive_coeffects(then_expr));").unwrap();

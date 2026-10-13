@@ -15,6 +15,9 @@
 //!     A `Value::Null` is accepted only where the container permits it.
 //!   - Unknown map keys against a struct schema are tolerated (forward
 //!     compatibility); missing non-nullable fields are not.
+//!   - `ValueType::Json` includes null as one of its values (as
+//!     `google.protobuf.Value` does), so a Json-typed slot admits null
+//!     whatever its container's nullability flag says.
 
 use meta_types::value::{MapKey, Value, ValueType};
 
@@ -119,7 +122,7 @@ fn check(value: &Value, ty: &ValueType, path: &str) -> Result<(), Mismatch> {
                 for (i, item) in items.iter().enumerate() {
                     let p = index_path(path, i);
                     if matches!(item, V::Null) {
-                        if !elements_nullable {
+                        if !null_ok(*elements_nullable, element_type) {
                             return Err(err(&p, "null element not permitted"));
                         }
                     } else {
@@ -137,7 +140,7 @@ fn check(value: &Value, ty: &ValueType, path: &str) -> Result<(), Mismatch> {
                     let p = format!("{path}[{}]", map_key_display(k));
                     check_map_key(k, key_type, &p)?;
                     if matches!(v, V::Null) {
-                        if !values_nullable {
+                        if !null_ok(*values_nullable, value_type) {
                             return Err(err(&p, "null value not permitted"));
                         }
                     } else {
@@ -156,12 +159,12 @@ fn check(value: &Value, ty: &ValueType, path: &str) -> Result<(), Mismatch> {
                     let p = child_path(path, &f.name);
                     match m.get(&MapKey::String(f.name.clone())) {
                         None => {
-                            if !f.nullable {
+                            if !null_ok(f.nullable, &f.value_type) {
                                 return Err(err(&p, "missing required field"));
                             }
                         }
                         Some(V::Null) => {
-                            if !f.nullable {
+                            if !null_ok(f.nullable, &f.value_type) {
                                 return Err(err(&p, "null not permitted for required field"));
                             }
                         }
@@ -181,7 +184,7 @@ fn check(value: &Value, ty: &ValueType, path: &str) -> Result<(), Mismatch> {
                 for (f, v) in fields.iter().zip(vals) {
                     let p = child_path(path, &f.name);
                     if matches!(v, V::Null) {
-                        if !f.nullable {
+                        if !null_ok(f.nullable, &f.value_type) {
                             return Err(err(&p, "null not permitted for required field"));
                         }
                     } else {
@@ -195,6 +198,47 @@ fn check(value: &Value, ty: &ValueType, path: &str) -> Result<(), Mismatch> {
 
         // A foreign key is checked at the level of its key value.
         T::EntityRef { key_type, .. } => check(value, key_type, path),
+
+        T::Json => check_json(value, path),
+    }
+}
+
+/// Whether a container slot of type `ty` may hold `Value::Null`.
+pub(crate) fn null_ok(nullable: bool, ty: &ValueType) -> bool {
+    nullable || matches!(ty, ValueType::Json)
+}
+
+/// The JSON-native subset: null, bool, i64, finite f64, string, arrays of
+/// these, and string-keyed maps of these.
+fn check_json(value: &Value, path: &str) -> Result<(), Mismatch> {
+    use Value as V;
+    match value {
+        V::Null | V::Bool(_) | V::I64(_) | V::String(_) => Ok(()),
+        V::F64(x) if x.is_finite() => Ok(()),
+        V::F64(_) => Err(err(path, "non-finite f64 is not a json value")),
+        V::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                check_json(item, &index_path(path, i))?;
+            }
+            Ok(())
+        }
+        V::Map(m) => {
+            for (k, v) in m {
+                let p = format!("{path}[{}]", map_key_display(k));
+                if !matches!(k, MapKey::String(_)) {
+                    return Err(err(&p, "json object keys must be strings"));
+                }
+                check_json(v, &p)?;
+            }
+            Ok(())
+        }
+        other => Err(err(
+            path,
+            format!(
+                "expected json (null, bool, i64, f64, string, array, or string-keyed map), found {}",
+                variant_name(other)
+            ),
+        )),
     }
 }
 
@@ -283,6 +327,21 @@ mod tests {
     use super::*;
     use meta_types::value::StructField;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn json_conformance() {
+        let ok = map(vec![("a", Value::Array(vec![Value::I64(1), Value::Null, Value::F64(0.5)]))]);
+        assert!(conforms(&ok, &ValueType::Json).is_ok());
+        assert!(conforms(&Value::Null, &ValueType::Json).is_ok());
+        assert!(conforms(&Value::I32(1), &ValueType::Json).is_err());
+        assert!(conforms(&Value::F64(f64::INFINITY), &ValueType::Json).is_err());
+        let nested_bad = map(vec![("a", Value::Array(vec![Value::Uuid(0)]))]);
+        let e = conforms(&nested_bad, &ValueType::Json).unwrap_err();
+        assert_eq!(e.path, "[\"a\"][0]");
+        // A Json-typed struct field admits null even when declared required.
+        let st = ValueType::Struct { fields: vec![field("j", ValueType::Json, false)] };
+        assert!(conforms(&map(vec![("j", Value::Null)]), &st).is_ok());
+    }
 
     fn field(name: &str, value_type: ValueType, nullable: bool) -> StructField {
         StructField {

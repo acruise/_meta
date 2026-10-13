@@ -99,7 +99,14 @@ fn convert_with_udfs(expr: &Expression, has_udf: &Cell<bool>, external_names: &H
             let values: Result<Vec<Value>, ()> = items.iter().map(convert_to_literal_value).collect();
             match values {
                 Ok(vals) => Ok(LogExpr::Literal(Value::Array(vals))),
-                Err(()) => Ok(make_udf(expr, has_udf)),
+                // Non-constant items: build the list by appending to the
+                // empty list, so `[a, b]` is list_append(list_append([], a), b).
+                Err(()) => items.iter().try_fold(LogExpr::Literal(Value::Array(vec![])), |acc, item| {
+                    Ok(LogExpr::ListAppend {
+                        lhs: boxed(acc),
+                        rhs: boxed(convert_with_udfs(item, has_udf, external_names)?),
+                    })
+                }),
             }
         }
 
@@ -850,6 +857,27 @@ mod tests {
         assert!(c.is_unknown());
         assert!(c.reads_current_time());
         assert!(c.may_read(&Coeffect::CallsExternalUdf(crate::coeffects::UdfLanguage::Wasm)));
+    }
+
+    /// A list literal with a non-constant item is built by appending to the
+    /// empty list rather than falling back to opaque CEL.
+    #[test]
+    fn dynamic_list_literal_lowers_to_appends() {
+        let t = cel_to_log_expr("[1, age]").unwrap();
+        assert_eq!(t.status, TranslationStatus::FullyRaised);
+        assert_eq!(t.expr, LogExpr::ListAppend {
+            lhs: Box::new(LogExpr::ListAppend {
+                lhs: Box::new(LogExpr::Literal(Value::Array(vec![]))),
+                rhs: Box::new(lit_i64(1)),
+            }),
+            rhs: Box::new(field("age")),
+        });
+    }
+
+    #[test]
+    fn constant_list_literal_stays_literal() {
+        let t = cel_to_log_expr("[1, 2]").unwrap();
+        assert_eq!(t.expr, LogExpr::Literal(Value::Array(vec![Value::I64(1), Value::I64(2)])));
     }
 
     #[test]

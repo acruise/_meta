@@ -996,6 +996,111 @@
   params: [T, "list(T)"]
   return: bool
 
+# The entries below are total over dynamically-typed values (`dyn`): applied
+# to a value of the wrong shape they return an empty list rather than an
+# error or null. That makes them composable over documents whose shape is
+# not known until evaluation (parsed JSON, YAML), where "this node has no
+# such child" is an ordinary outcome, not a fault. A 0-or-1-element list is
+# how an optional result is represented, since the IR has no option type.
+
+- id: list_append
+  internal: ListAppend
+  status: mapped
+  params: ["list(T)", T]
+  return: "list(T)"
+  notes: >
+    The list with one element added at the end. A CEL list literal whose
+    items are not all constants lowers to a chain of these starting from the
+    empty list, so `[a, b]` is list_append(list_append([], a), b).
+
+- id: list_concat
+  internal: ListConcat
+  status: mapped
+  params: ["list(T)", "list(T)"]
+  return: "list(T)"
+  notes: >
+    Elements of the first list followed by elements of the second. CEL
+    spells this `_+_` on lists, an overload of the arithmetic operator that
+    is not yet distinguished from it.
+
+- id: flatten
+  internal: Flatten
+  status: mapped
+  params: ["list(list(T))"]
+  return: "list(T)"
+  notes: >
+    Concatenation of the inner lists, in order. One level only. An inner
+    element that is not a list contributes nothing. flat_map is
+    flatten(map(xs, x, f(x))).
+
+- id: list_elements
+  internal: ListElements
+  status: mapped
+  params: [dyn]
+  return: "list(dyn)"
+  notes: >
+    The elements of a list, in order. Any other value (including null and
+    maps) yields the empty list. Identity on lists; exists so a selection
+    over a value of unknown shape can be written without a type test.
+
+- id: map_values
+  internal: MapValues
+  status: mapped
+  params: [dyn]
+  return: "list(dyn)"
+  notes: >
+    The member values of a map, in key order. Any other value (including
+    null and lists) yields the empty list.
+
+- id: descendants
+  internal: Descendants
+  status: mapped
+  params: [dyn]
+  return: "list(dyn)"
+  notes: >
+    The value itself followed by every value nested inside it, depth-first
+    in document order (list elements in order, map member values in key
+    order). Always non-empty: a scalar yields a one-element list of itself.
+
+- id: get_element_by_index
+  internal: GetElementByIndex
+  status: mapped
+  params: [dyn, int]
+  return: "list(dyn)"
+  notes: >
+    Optional list element: a one-element list holding the element at the
+    given index, counting from the end when negative, or the empty list if
+    the index is out of range or the first argument is not a list. The
+    list counterpart of get_child_by_index; maps use get_member_by_key.
+
+- id: get_member_by_key
+  internal: GetMemberByKey
+  status: mapped
+  params: [dyn, dyn]
+  return: "list(dyn)"
+  notes: >
+    Optional map member: a one-element list holding the value of the member
+    whose key equals the second argument, or the empty list if there is no
+    such member or the first argument is not a map. Distinguishes an absent
+    member (empty list) from a member whose value is null (a list holding
+    null), which plain indexing cannot. The map counterpart of
+    get_child_by_name; lists use get_element_by_index.
+
+- id: list_slice
+  internal: ListSlice
+  status: mapped
+  child_names: [collection, start, end, step]
+  params: ["list(T)", "int?", "int?", "int?"]
+  return: "list(T)"
+  notes: >
+    Elements from start (inclusive) to end (exclusive) taking every step-th.
+    Negative start and end count from the end of the list. A null step means
+    1; a null start or end means the beginning or end of the list in the
+    direction of travel. A negative step walks backwards; a zero step yields
+    the empty list. Out-of-range bounds are clamped, never an error. The
+    semantics are those of RFC 9535 array slices. A non-list first argument
+    yields the empty list.
+
 # ═══════════════════════════════════════════════════════════════════════
 #  LOGARITHMIC
 # ═══════════════════════════════════════════════════════════════════════
@@ -1314,6 +1419,18 @@
     become struct field names; types are inferred or declared by schema.
     The common case: a varchar column containing an escaped JSON document.
     Unlike JsonParse, the target struct type must be known at compile time.
+
+- id: json_parse_as
+  internal: JsonParseAs
+  status: todo
+  params: [string]
+  return: T
+  properties: { target_type: type }
+  notes: >
+    Parse JSON text and read it as target_type, a type literal in the compact
+    type syntax, resolved when the plan is built; the result type is that
+    type. Malformed text is may_error; well-formed JSON of the wrong shape is
+    may_not_conform. Equivalent to reading json_parse(s) as target_type.
 
 - id: json_stringify
   internal: JsonStringify

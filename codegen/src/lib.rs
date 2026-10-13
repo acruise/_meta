@@ -8,6 +8,8 @@ pub use meta_types::cluonflux;
 pub mod codegen;
 pub mod type_check;
 pub mod cel_to_ir;
+pub mod jsonpath;
+pub mod type_resolver;
 pub mod event_proto_codegen;
 pub mod normalizer;
 pub mod udf_resolver;

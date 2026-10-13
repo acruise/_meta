@@ -64,31 +64,11 @@ struct RawStructField {
     nullable: bool,
 }
 
+/// A UDF catalog type string, in the compact syntax of
+/// [`crate::type_syntax`]. An unparseable string is `Null`, as it always was
+/// here; catalog loading does not report type errors.
 fn parse_simple_type(s: &str) -> ValueType {
-    match s {
-        "bool" => ValueType::Bool,
-        "i8" => ValueType::I8,
-        "i16" => ValueType::I16,
-        "i32" => ValueType::I32,
-        "i64" | "int" => ValueType::I64,
-        "u8" => ValueType::U8,
-        "u16" => ValueType::U16,
-        "u32" => ValueType::U32,
-        "u64" | "uint" => ValueType::U64,
-        "f32" => ValueType::F32,
-        "f64" | "double" => ValueType::F64,
-        "string" => ValueType::String,
-        "bytes" | "blob" => ValueType::Blob,
-        "date" => ValueType::Date,
-        "uuid" => ValueType::Uuid,
-        "ipv4" => ValueType::Ipv4,
-        "ipv6" => ValueType::Ipv6,
-        "timestamp" => ValueType::Timestamp {
-            precision: crate::value::TimestampPrecision::Millis,
-            timezone: crate::value::TimestampTimezone::None,
-        },
-        _ => ValueType::Null,
-    }
+    crate::type_syntax::parse_type_literal(s).unwrap_or(ValueType::Null)
 }
 
 fn convert_type(raw: &RawType) -> ValueType {

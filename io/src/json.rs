@@ -34,6 +34,11 @@
 //!   only), values per the value type. `BTreeMap` gives canonical sorted
 //!   entry order.
 //!
+//! - `Json` takes the JSON as it is, with no schema: numbers become `I64`
+//!   when integral and in range, else `F64`; objects become string-keyed
+//!   maps. `null` is itself a Json value, so a Json-typed slot admits it
+//!   whatever its container's nullability flag says.
+//!
 //! [`value_to_json`] emits the canonical JSON form (base64 blobs, hyphenated
 //! UUIDs, `"YYYY-MM-DD"` dates, integer timestamps -- RFC 3339 for
 //! `TimestampTz`, decimal strings, enum symbols), such that
@@ -81,6 +86,37 @@ fn json_kind(json: &Json) -> &'static str {
 // JSON -> Value
 // ---------------------------------------------------------------------------
 
+/// The schemaless reading of `json`: the `Value` of type `ValueType::Json`
+/// it denotes. Total: every JSON document has one.
+pub fn untyped(json: &Json) -> Value {
+    match json {
+        Json::Null => Value::Null,
+        Json::Bool(b) => Value::Bool(*b),
+        Json::Number(n) => match n.as_i64() {
+            Some(i) => Value::I64(i),
+            // Beyond i64 or non-integral: a double, as JSON readers do.
+            None => Value::F64(n.as_f64().unwrap_or(f64::NAN)),
+        },
+        Json::String(s) => Value::String(s.clone()),
+        Json::Array(items) => Value::Array(items.iter().map(untyped).collect()),
+        Json::Object(o) => Value::Map(
+            o.iter().map(|(k, v)| (MapKey::String(k.clone()), untyped(v))).collect(),
+        ),
+    }
+}
+
+/// Render a value of any type as the `ValueType::Json` value of its
+/// canonical JSON form. `from_json_value(to_json_value(v, ty)?, ty) == v`.
+pub fn to_json_value(value: &Value, ty: &ValueType) -> Result<Value, Mismatch> {
+    Ok(untyped(&value_to_json(value, ty)?))
+}
+
+/// Read a `ValueType::Json` value as type `ty`, by the same rules as
+/// [`json_to_value`].
+pub fn from_json_value(value: &Value, ty: &ValueType) -> Result<Value, Mismatch> {
+    json_to_value(&value_to_json(value, &ValueType::Json)?, ty)
+}
+
 /// Parse `json` into the canonical [`Value`] for `ty`. The root itself is
 /// non-nullable (a nullable root belongs to the *container* holding it);
 /// `ValueType::Null` is the one type JSON `null` inhabits directly.
@@ -92,7 +128,7 @@ pub(crate) fn parse(json: &Json, ty: &ValueType, nullable: bool, path: &str) -> 
     use ValueType as T;
 
     if json.is_null() {
-        if matches!(ty, T::Null) || nullable {
+        if matches!(ty, T::Null | T::Json) || nullable {
             return Ok(Value::Null);
         }
         return Err(err(path, "null where the type does not permit it"));
@@ -200,6 +236,7 @@ pub(crate) fn parse(json: &Json, ty: &ValueType, nullable: bool, path: &str) -> 
         }
         // A foreign key travels as its key value.
         T::EntityRef { key_type, .. } => parse(json, key_type, nullable, path),
+        T::Json => Ok(untyped(json)),
     }
 }
 
@@ -253,6 +290,37 @@ pub(crate) fn parse_map_key(k: &str, key_type: &ValueType) -> Option<MapKey> {
 // ---------------------------------------------------------------------------
 // Value -> JSON
 // ---------------------------------------------------------------------------
+
+/// A Json-typed value's JSON form; rejects anything outside the Json domain.
+fn emit_untyped(value: &Value, path: &str) -> Result<Json, Mismatch> {
+    Ok(match value {
+        Value::Null => Json::Null,
+        Value::Bool(b) => Json::Bool(*b),
+        Value::I64(i) => (*i).into(),
+        Value::F64(x) => serde_json::Number::from_f64(*x)
+            .map(Json::Number)
+            .ok_or_else(|| err(path, "non-finite f64 has no JSON form"))?,
+        Value::String(s) => Json::String(s.clone()),
+        Value::Array(items) => Json::Array(
+            items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| emit_untyped(item, &index_path(path, i)))
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Map(m) => {
+            let mut object = serde_json::Map::with_capacity(m.len());
+            for (k, v) in m {
+                let MapKey::String(k) = k else {
+                    return Err(err(path, "json object keys must be strings"));
+                };
+                object.insert(k.clone(), emit_untyped(v, &key_path(path, k))?);
+            }
+            Json::Object(object)
+        }
+        other => return Err(err(path, format!("{other:?} is not a json value"))),
+    })
+}
 
 /// Emit the canonical JSON form of `value` under `ty`. Inverse of
 /// [`json_to_value`]: round-tripping a canonical value is the identity.
@@ -365,6 +433,7 @@ pub(crate) fn emit(value: &Value, ty: &ValueType, path: &str) -> Result<Json, Mi
         }
         (T::EntityRef { key_type, .. }, v) => emit(v, key_type, path)?,
         (T::Null, _) => return Err(mismatch("null")),
+        (T::Json, v) => emit_untyped(v, path)?,
         _ => return Err(mismatch(&format!("{ty:?}"))),
     })
 }
@@ -814,6 +883,54 @@ mod tests {
     use crate::conformance::conforms;
     use meta_types::value::StructField;
     use serde_json::json;
+
+    #[test]
+    fn json_type_reads_any_document_without_a_schema() {
+        let doc = json!({"a": [1, 2.5, "x", null, true], "b": {"c": null}, "big": 18446744073709551615u64});
+        let v = json_to_value(&doc, &ValueType::Json).unwrap();
+        assert!(conforms(&v, &ValueType::Json).is_ok());
+        let Value::Map(m) = &v else { panic!() };
+        assert_eq!(m[&MapKey::String("big".into())], Value::F64(18446744073709551615u64 as f64));
+        let Value::Array(a) = &m[&MapKey::String("a".into())] else { panic!() };
+        assert_eq!(a[..2], [Value::I64(1), Value::F64(2.5)]);
+        assert_eq!(value_to_json(&v, &ValueType::Json).unwrap()["a"], json!([1, 2.5, "x", null, true]));
+    }
+
+    #[test]
+    fn json_type_admits_null_at_the_root_and_in_non_nullable_slots() {
+        assert_eq!(json_to_value(&json!(null), &ValueType::Json).unwrap(), Value::Null);
+        let arr = ValueType::Array { element_type: Box::new(ValueType::Json), elements_nullable: false };
+        let v = json_to_value(&json!([1, null]), &arr).unwrap();
+        assert_eq!(v, Value::Array(vec![Value::I64(1), Value::Null]));
+        assert!(conforms(&v, &arr).is_ok());
+    }
+
+    #[test]
+    fn json_type_rejects_values_outside_the_json_domain() {
+        assert!(value_to_json(&Value::U64(1), &ValueType::Json).is_err());
+        assert!(value_to_json(&Value::F64(f64::NAN), &ValueType::Json).is_err());
+        let int_keyed = Value::Map([(MapKey::I64(1), Value::Null)].into_iter().collect());
+        assert!(value_to_json(&int_keyed, &ValueType::Json).is_err());
+    }
+
+    #[test]
+    fn to_and_from_json_value_round_trip_typed_values() {
+        let ty = ValueType::Timestamp {
+            precision: TimestampPrecision::Millis,
+            timezone: TimestampTimezone::UtcOffset,
+        };
+        let v = json_to_value(&json!("2024-05-01T12:00:00.250+02:00"), &ty).unwrap();
+        let j = to_json_value(&v, &ty).unwrap();
+        assert_eq!(j, Value::String("2024-05-01T12:00:00.250+02:00".into()));
+        assert!(conforms(&j, &ValueType::Json).is_ok());
+        assert_eq!(from_json_value(&j, &ty).unwrap(), v);
+        // A bare string is a Json value, so it parses as a date directly.
+        assert_eq!(
+            from_json_value(&Value::String("2024-05-01".into()), &ValueType::Date).unwrap(),
+            json_to_value(&json!("2024-05-01"), &ValueType::Date).unwrap()
+        );
+        assert!(from_json_value(&Value::String("42".into()), &ValueType::I64).is_err());
+    }
 
     fn field(name: &str, value_type: ValueType, nullable: bool) -> StructField {
         StructField {

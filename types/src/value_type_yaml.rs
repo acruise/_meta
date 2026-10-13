@@ -1,14 +1,14 @@
 //! A YAML surface syntax for `ValueType`, so a type can sit in a catalog
 //! and be referenced by name, or be written inline.
 //!
-//! This is the single recursive codec for types-as-YAML. (The shallow
-//! `parse_simple_type` in `udf_catalog` predates it and only handles flat
-//! scalars; it should eventually fold onto this.)
+//! This is the single recursive codec for types-as-YAML. String nodes are
+//! parsed by [`crate::type_syntax`], which `udf_catalog` also uses.
 //!
 //! # Surface forms
 //!
-//! A type node is either a **string** -- a scalar keyword or the name of a
-//! declared type -- or a single-key **mapping** naming a constructor:
+//! A type node is either a **string** -- any type in the compact syntax of
+//! [`crate::type_syntax`], which includes a bare scalar keyword or the name of
+//! a declared type -- or a single-key **mapping** naming a constructor:
 //!
 //! ```yaml
 //! # scalars (bare keywords)
@@ -31,6 +31,10 @@
 //! # a reference to a declared type, by name
 //! Address                 # bare string that is not a scalar keyword
 //! { ref: Address }        # explicit form (never mistaken for a scalar)
+//!
+//! # the compact syntax, in a string; names resolve as above
+//! "map<string, array<Address>?>"
+//! "decimal(18, 2)"
 //! ```
 //!
 //! A **catalog** is a `types:` mapping of name to type node; declarations may
@@ -53,6 +57,7 @@ use std::collections::{BTreeMap, HashSet};
 
 use serde_yaml::Value as Yaml;
 
+use crate::type_syntax::{timestamp_precision, timestamp_timezone, try_parse_type_literal_with};
 use crate::value::{StructField, TimestampPrecision, TimestampTimezone, ValueType};
 
 /// A resolved set of named `ValueType` declarations.
@@ -175,10 +180,15 @@ impl NameResolver for BuildResolver<'_> {
 
 fn parse_node(node: &Yaml, r: &dyn NameResolver) -> Result<ValueType, String> {
     match node {
-        Yaml::String(s) => match scalar_keyword(s) {
-            Some(vt) => Ok(vt),
-            None => r.resolve(s),
-        },
+        Yaml::String(s) => try_parse_type_literal_with(s, &|name| r.resolve(name)).map_err(|e| {
+            // A bare name keeps the resolver's own message (unknown or cyclic
+            // reference); a compound gets the position as well.
+            if s.trim() == s && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.') {
+                e.message
+            } else {
+                format!("`{s}`: {e}")
+            }
+        }),
         Yaml::Mapping(_) => parse_compound(node, r),
         other => Err(format!("expected a type (string or mapping), found {}", yaml_kind(other))),
     }
@@ -271,56 +281,13 @@ fn parse_compound(node: &Yaml, r: &dyn NameResolver) -> Result<ValueType, String
     }
 }
 
-/// Bare scalar keywords (and a couple of convenience defaults for the
-/// parameterized scalars). `None` means "not a keyword" -- treat as a name.
-fn scalar_keyword(s: &str) -> Option<ValueType> {
-    Some(match s {
-        "bool" | "boolean" => ValueType::Bool,
-        "i8" => ValueType::I8,
-        "i16" => ValueType::I16,
-        "i32" => ValueType::I32,
-        "i64" | "int" => ValueType::I64,
-        "u8" => ValueType::U8,
-        "u16" => ValueType::U16,
-        "u32" => ValueType::U32,
-        "u64" | "uint" => ValueType::U64,
-        "f32" => ValueType::F32,
-        "f64" | "double" | "float" => ValueType::F64,
-        "string" => ValueType::String,
-        "blob" | "bytes" => ValueType::Blob,
-        "clob" => ValueType::Clob,
-        "date" => ValueType::Date,
-        "uuid" => ValueType::Uuid,
-        "ipv4" => ValueType::Ipv4,
-        "ipv6" => ValueType::Ipv6,
-        "null" => ValueType::Null,
-        // Convenience defaults; use the mapping form for explicit parameters.
-        "timestamp" => ValueType::Timestamp {
-            precision: TimestampPrecision::Millis,
-            timezone: TimestampTimezone::None,
-        },
-        "decimal" => ValueType::Decimal { precision: 38, scale: 0 },
-        _ => return None,
-    })
-}
 
 fn ts_precision(s: &str) -> Result<TimestampPrecision, String> {
-    Ok(match s {
-        "unspecified" => TimestampPrecision::Unspecified,
-        "seconds" | "s" => TimestampPrecision::Seconds,
-        "millis" | "ms" => TimestampPrecision::Millis,
-        "micros" | "us" => TimestampPrecision::Micros,
-        "nanos" | "ns" => TimestampPrecision::Nanos,
-        other => return Err(format!("unknown timestamp precision `{other}`")),
-    })
+    timestamp_precision(s).ok_or_else(|| format!("unknown timestamp precision `{s}`"))
 }
 
 fn ts_timezone(s: &str) -> Result<TimestampTimezone, String> {
-    Ok(match s {
-        "none" => TimestampTimezone::None,
-        "utc_offset" => TimestampTimezone::UtcOffset,
-        other => return Err(format!("unknown timestamp timezone `{other}`")),
-    })
+    timestamp_timezone(s).ok_or_else(|| format!("unknown timestamp timezone `{s}`"))
 }
 
 // --- small YAML accessors with honest errors ---
@@ -390,6 +357,7 @@ pub fn to_yaml(vt: &ValueType) -> Yaml {
         ValueType::Uuid => s("uuid"),
         ValueType::Ipv4 => s("ipv4"),
         ValueType::Ipv6 => s("ipv6"),
+        ValueType::Json => s("json"),
         ValueType::Decimal { precision, scale } => {
             single("decimal", map_of([("precision", num(*precision as u64)), ("scale", num(*scale as u64))]))
         }
@@ -484,6 +452,34 @@ mod tests {
 
     fn inline(yaml: &str) -> Result<ValueType, String> {
         parse_type(yaml, &TypeCatalog::empty())
+    }
+
+    #[test]
+    fn compact_syntax_in_strings() {
+        assert_eq!(inline("\"map<string, array<i64?>>\"").unwrap().to_string(), "map<string, array<i64?>>");
+        let cat = TypeCatalog::from_yaml(
+            "types:\n  Point: \"struct{x: f64, y: f64}\"\n  Path: \"array<Point>\"\n  Named: { struct: [ { name: p, type: \"map<string, Path?>\" } ] }\n",
+        )
+        .unwrap();
+        assert_eq!(cat.get("Path").unwrap().to_string(), "array<struct{x: f64, y: f64}>");
+        assert_eq!(
+            cat.get("Named").unwrap().to_string(),
+            "struct{p: map<string, array<struct{x: f64, y: f64}>?>}"
+        );
+    }
+
+    #[test]
+    fn compact_syntax_cycles_and_errors_are_reported() {
+        let e = TypeCatalog::from_yaml("types:\n  A: \"array<B>\"\n  B: \"map<string, A>\"\n").unwrap_err();
+        assert!(e.contains("cyclic"), "{e}");
+        let e = inline("\"array<i64\"").unwrap_err();
+        assert!(e.contains("array<i64") && e.contains("expected '>'"), "{e}");
+    }
+
+    #[test]
+    fn json_keyword_round_trips() {
+        assert_eq!(inline("json").unwrap(), ValueType::Json);
+        assert_eq!(to_yaml(&ValueType::Json), Yaml::String("json".into()));
     }
 
     #[test]
