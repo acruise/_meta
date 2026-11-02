@@ -938,6 +938,7 @@ mod tests {
             human_name: name.to_string(),
             value_type,
             nullable,
+            mutable: true,
         }
     }
 

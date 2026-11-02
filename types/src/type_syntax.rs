@@ -349,7 +349,7 @@ impl<'a> Parser<'a> {
                         }
                         self.expect(':')?;
                         let (value_type, nullable) = self.nullable_ty()?;
-                        fields.push(StructField { human_name: name.clone(), name, value_type, nullable });
+                        fields.push(StructField { human_name: name.clone(), name, value_type, nullable, mutable: true });
                         if self.eat(',') {
                             continue;
                         }

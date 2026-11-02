@@ -486,8 +486,8 @@ mod tests {
     #[test]
     fn native_fn_returning_struct() {
         let schema = vec![
-            StructField { name: "browser".into(), human_name: "".into(), value_type: ValueType::String, nullable: false },
-            StructField { name: "os".into(), human_name: "".into(), value_type: ValueType::String, nullable: false },
+            StructField { name: "browser".into(), human_name: "".into(), value_type: ValueType::String, nullable: false, mutable: true },
+            StructField { name: "os".into(), human_name: "".into(), value_type: ValueType::String, nullable: false, mutable: true },
         ];
         let return_type = ValueType::Struct { fields: schema.clone() };
         let entry = test_entry("parse_ua", vec![param("agent", ValueType::String)], return_type.clone());
@@ -520,8 +520,8 @@ mod tests {
     #[test]
     fn encoded_struct_with_nulls() {
         let schema = vec![
-            StructField { name: "x".into(), human_name: "".into(), value_type: ValueType::I64, nullable: true },
-            StructField { name: "y".into(), human_name: "".into(), value_type: ValueType::String, nullable: true },
+            StructField { name: "x".into(), human_name: "".into(), value_type: ValueType::I64, nullable: true, mutable: true },
+            StructField { name: "y".into(), human_name: "".into(), value_type: ValueType::String, nullable: true, mutable: true },
         ];
         let mut s = EncodedStruct::new(schema);
         s.push(42i64);

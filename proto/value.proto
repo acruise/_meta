@@ -222,6 +222,32 @@ message StructField {
 
   // Whether values in this field may be null.
   bool nullable = 4;
+
+  // Whether this field may differ between versions of the identity-bearing
+  // container (an entity instance, a single-writer instance across its
+  // generations) that holds
+  // the struct as its payload. Structs are value types and have no identity
+  // of their own, so on a free-standing value the flag means nothing; it is
+  // a constraint on the container's version chain, declared here and
+  // enforced there. `false` means fixed at creation: every version carries
+  // the value the creating version had, and a nullable field that was null
+  // at creation stays null. That is deliberately the only reading, because
+  // "equal to the creation version" is checkable against one immutable row
+  // and keeps the persistence algebra's writes coordination-free.
+  //
+  // Absent means mutable, which is why this is `optional`: a proto3 bool
+  // would default every existing struct to immutable.
+  //
+  // TODO: write-once (null, then a value, never again) and append-only
+  // (each version extends the previous) feel like equally fundamental
+  // properties and are not expressible here. Both are constraints against
+  // the *predecessor* version rather than the creation version, so they
+  // need a serialized writer to enforce, which the persistence algebra
+  // deliberately does not have and a single-writer generation chain does.
+  // Where
+  // they belong, this field, the container, or a mutation-operation
+  // vocabulary the container exposes, is open.
+  optional bool mutable = 5;
 }
 
 // --- Entity reference (foreign key) ---

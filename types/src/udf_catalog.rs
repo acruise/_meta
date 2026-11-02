@@ -80,6 +80,7 @@ fn convert_type(raw: &RawType) -> ValueType {
                 human_name: if f.human_name.is_empty() { f.name.clone() } else { f.human_name.clone() },
                 value_type: parse_simple_type(&f.r#type),
                 nullable: f.nullable,
+                mutable: true,
             }).collect(),
         },
     }

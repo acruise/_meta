@@ -878,8 +878,8 @@ mod tests {
     fn person_type() -> ValueType {
         ValueType::Struct {
             fields: vec![
-                StructField { name: "name".into(), human_name: "".into(), value_type: ValueType::String, nullable: false },
-                StructField { name: "age".into(), human_name: "".into(), value_type: ValueType::I64, nullable: true },
+                StructField { name: "name".into(), human_name: "".into(), value_type: ValueType::String, nullable: false, mutable: true },
+                StructField { name: "age".into(), human_name: "".into(), value_type: ValueType::I64, nullable: true, mutable: true },
             ],
         }
     }
@@ -933,6 +933,7 @@ mod tests {
                 human_name: "".into(),
                 value_type: ValueType::Array { element_type: Box::new(ValueType::String), elements_nullable: false },
                 nullable: false,
+                mutable: true,
             }],
         };
         let v = Value::Struct(vec![Value::Array(vec![Value::String("ok".into()), Value::I64(7)])]);
@@ -995,7 +996,7 @@ mod tests {
         let lo = 9_007_199_254_740_992_i64; // 2^53
         let hi = 9_007_199_254_740_993_i64; // 2^53 + 1
         let ty = ValueType::Struct {
-            fields: vec![StructField { name: "n".into(), human_name: "".into(), value_type: ValueType::I64, nullable: false }],
+            fields: vec![StructField { name: "n".into(), human_name: "".into(), value_type: ValueType::I64, nullable: false, mutable: true }],
         };
         let val = Value::Struct(vec![Value::I64(hi)]);
         let rules = EntityValidation {
@@ -1009,7 +1010,7 @@ mod tests {
     #[test]
     fn exclusive_bound_rejects_the_boundary() {
         let ty = ValueType::Struct {
-            fields: vec![StructField { name: "x".into(), human_name: "".into(), value_type: ValueType::F64, nullable: false }],
+            fields: vec![StructField { name: "x".into(), human_name: "".into(), value_type: ValueType::F64, nullable: false, mutable: true }],
         };
         let at_zero = Value::Struct(vec![Value::F64(0.0)]);
 

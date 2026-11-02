@@ -162,6 +162,11 @@ pub struct StructField {
     pub human_name: String,
     pub value_type: ValueType,
     pub nullable: bool,
+    /// See `StructField.mutable` in value.proto: a constraint on the
+    /// version chain of whatever identity-bearing container holds this
+    /// struct, meaningless on a free-standing value. `false` is fixed at
+    /// creation. Defaults to `true`.
+    pub mutable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -490,6 +495,7 @@ mod proto_conv {
                         human_name: f.human_name.clone(),
                         value_type: Some(pb::ValueType::from(&f.value_type)),
                         nullable: f.nullable,
+                        mutable: Some(f.mutable),
                     }).collect(),
                 }),
                 ValueType::EntityRef { target_type_id, key_type, revision_pinnable } => {
@@ -559,6 +565,7 @@ mod proto_conv {
                             value_type: f.value_type.as_ref()
                                 .map(ValueType::from).unwrap_or(ValueType::Null),
                             nullable: f.nullable,
+                            mutable: f.mutable.unwrap_or(true),
                         }).collect(),
                     },
                     Kind::EntityRef(e) => ValueType::EntityRef {
@@ -973,11 +980,33 @@ mod tests {
     }
 
     #[test]
+    fn struct_field_mutable_survives_proto() {
+        use crate::cluonflux::meta as pb;
+        let vt = ValueType::Struct {
+            fields: vec![
+                StructField { name: "id".into(), human_name: "".into(), value_type: ValueType::Uuid, nullable: false, mutable: false },
+                StructField { name: "n".into(), human_name: "".into(), value_type: ValueType::I64, nullable: true, mutable: true },
+            ],
+        };
+        let back = ValueType::from(&pb::ValueType::from(&vt));
+        assert_eq!(back, vt);
+        // A proto with the field absent reads as mutable.
+        let mut pbv = pb::ValueType::from(&vt);
+        if let Some(pb::value_type::Kind::StructType(st)) = &mut pbv.kind {
+            for f in &mut st.fields {
+                f.mutable = None;
+            }
+        }
+        let ValueType::Struct { fields } = ValueType::from(&pbv) else { panic!("not a struct") };
+        assert!(fields.iter().all(|f| f.mutable));
+    }
+
+    #[test]
     fn value_serde_struct() {
         let vt = ValueType::Struct {
             fields: vec![
-                StructField { name: "name".into(), human_name: "".into(), value_type: ValueType::String, nullable: false },
-                StructField { name: "age".into(), human_name: "".into(), value_type: ValueType::I64, nullable: true },
+                StructField { name: "name".into(), human_name: "".into(), value_type: ValueType::String, nullable: false, mutable: true },
+                StructField { name: "age".into(), human_name: "".into(), value_type: ValueType::I64, nullable: true, mutable: true },
             ],
         };
         let value = Value::Struct(vec![

@@ -10,6 +10,11 @@
 # (column, struct field, array element, map value), not of the type itself.
 # Substrait puts nullability on every type; the mapping layer handles that.
 #
+# Mutability is the same kind of property: `StructField.mutable` in value.proto
+# belongs to the slot, not the type, and constrains the version chain of whatever
+# identity-bearing container holds the struct. CEL and Substrait have no
+# counterpart, so it never appears in the entries below either.
+#
 # Status values:
 #   mapped    — clean bidirectional mapping
 #   partial   — mapping exists but lossy or conditional (see notes)

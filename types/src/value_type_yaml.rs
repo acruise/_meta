@@ -253,6 +253,7 @@ fn parse_compound(node: &Yaml, r: &dyn NameResolver) -> Result<ValueType, String
                     human_name,
                     value_type,
                     nullable: opt_bool(fm, "nullable"),
+                    mutable: fm.get("mutable").and_then(Yaml::as_bool).unwrap_or(true),
                 });
             }
             Ok(ValueType::Struct { fields })
@@ -384,11 +385,19 @@ pub fn to_yaml(vt: &ValueType) -> Yaml {
             let items = fields
                 .iter()
                 .map(|f| {
-                    map_of([
+                    let mut m = map_of([
                         ("name", s(&f.name)),
                         ("type", to_yaml(&f.value_type)),
                         ("nullable", Yaml::Bool(f.nullable)),
-                    ])
+                    ]);
+                    // Mutable is the default and is omitted; only the
+                    // exception is written, so existing output is unchanged.
+                    if !f.mutable {
+                        if let Yaml::Mapping(mm) = &mut m {
+                            mm.insert(s("mutable"), Yaml::Bool(false));
+                        }
+                    }
+                    m
                 })
                 .collect();
             single("struct", Yaml::Sequence(items))
@@ -609,10 +618,27 @@ types:
     }
 
     #[test]
+    fn struct_field_mutable_defaults_true_and_round_trips() {
+        let vt = inline(
+            "{ struct: [ { name: id, type: uuid }, { name: note, type: string, nullable: true, mutable: false } ] }",
+        )
+        .unwrap();
+        let ValueType::Struct { fields } = &vt else { panic!("not a struct") };
+        assert!(fields[0].mutable, "absent `mutable` must read as mutable");
+        assert!(!fields[1].mutable);
+        let encoded = to_yaml(&vt);
+        let back = parse_value_type(&encoded, &TypeCatalog::empty()).unwrap();
+        assert_eq!(back, vt);
+        // The default is omitted from the emitted form; only the exception is written.
+        let text = serde_yaml::to_string(&encoded).unwrap();
+        assert_eq!(text.matches("mutable").count(), 1, "{text}");
+    }
+
+    #[test]
     fn round_trip_inline() {
         let vt = ValueType::Struct {
             fields: vec![
-                StructField { name: "id".into(), human_name: "id".into(), value_type: ValueType::Uuid, nullable: false },
+                StructField { name: "id".into(), human_name: "id".into(), value_type: ValueType::Uuid, nullable: false, mutable: true },
                 StructField {
                     name: "scores".into(),
                     human_name: "scores".into(),
@@ -622,6 +648,7 @@ types:
                         values_nullable: true,
                     },
                     nullable: false,
+                    mutable: true,
                 },
                 StructField {
                     name: "when".into(),
@@ -631,6 +658,7 @@ types:
                         timezone: TimestampTimezone::UtcOffset,
                     },
                     nullable: true,
+                    mutable: true,
                 },
             ],
         };
